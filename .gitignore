@@ -1,0 +1,7 @@
+/target
+.claude
+.traces
+.idea
+docs/superpowers
+logs
+.env

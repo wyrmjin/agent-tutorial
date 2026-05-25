@@ -1,0 +1,11 @@
+[package]
+name = "agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+provider = { path = "../provider" }
+tool = { path = "../tool" }
+anyhow = "1"
+serde_json = "1"
+logger = { path = "../logger" }

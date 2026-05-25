@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["crates/provider", "crates/agent", "crates/tool", "crates/logger"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[package]
+name = "agent-tutorial"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+provider = { path = "crates/provider" }
+agent = { path = "crates/agent" }
+tool = { path = "crates/tool" }
+anyhow = "1"
+dotenvy = "0.15"
+tokio = { version = "1", features = ["full"] }
+os_info = "3.15.0"
+logger = { path = "crates/logger" }
