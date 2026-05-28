@@ -9,12 +9,59 @@ pub use read_file::ReadFileTool;
 pub use write_file::WriteFileTool;
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Result of executing a tool.
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
     pub content: String,
     pub is_error: bool,
+    /// 是否需要用户审批才能继续执行
+    pub needs_approval: bool,
+    /// 需要审批的文件路径（仅当 needs_approval 为 true 时有意义）
+    pub approval_path: Option<String>,
+}
+
+impl ToolOutput {
+    /// 创建一个成功的工具输出。
+    pub fn ok(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            is_error: false,
+            needs_approval: false,
+            approval_path: None,
+        }
+    }
+
+    /// 创建一个错误的工具输出。
+    pub fn error(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            is_error: true,
+            needs_approval: false,
+            approval_path: None,
+        }
+    }
+
+    /// 创建一个成功输出，但允许指定 `is_error` 标志（用于命令执行退出码非零等场景）。
+    pub fn ok_with_status(content: impl Into<String>, is_error: bool) -> Self {
+        Self {
+            content: content.into(),
+            is_error,
+            needs_approval: false,
+            approval_path: None,
+        }
+    }
+
+    /// 创建一个需要用户审批的工具输出。
+    pub fn approval(content: impl Into<String>, path: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            is_error: false,
+            needs_approval: true,
+            approval_path: Some(path.into()),
+        }
+    }
 }
 
 /// A tool that the agent can invoke.
@@ -28,6 +75,9 @@ pub trait Tool: Send + Sync {
     fn parameters(&self) -> serde_json::Value;
     /// Execute the tool with the given input.
     async fn execute(&self, input: serde_json::Value) -> ToolOutput;
+
+    /// 批准工具的待审批操作。默认空实现，由需要审批的工具覆盖。
+    fn approve(&self, _input: &serde_json::Value) {}
 }
 
 /// Holds all registered tools and dispatches by name.
@@ -58,6 +108,15 @@ impl ToolRegistry {
         }
     }
 
+    /// 批准指定工具的待审批操作。由 main.rs 在用户同意后调用。
+    pub fn approve(&self, tool_name: &str, input: &serde_json::Value) {
+        if let Some(tool) = self.get(tool_name) {
+            tool.approve(input);
+        } else {
+            logger::warn!(%tool_name, "approve called for unknown tool");
+        }
+    }
+
     /// Build provider ToolSpecs for all registered tools.
     pub fn to_tool_specs(&self) -> Vec<provider::ToolSpec> {
         self.tools
@@ -75,4 +134,48 @@ impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 检查给定路径是否在当前工作目录内。
+/// 对拼接后的路径尝试 canonicalize（解析符号链接和 `..`），
+/// 不存在的路径则手动规范化 `..` 组件。
+pub(crate) fn is_within_cwd(path: &Path) -> bool {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    let resolved_cwd = match cwd.canonicalize() {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    let absolute: PathBuf = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+
+    // 路径已存在：canonicalize 解析符号链接和 ..
+    if let Ok(canonical) = absolute.canonicalize() {
+        return canonical.starts_with(&resolved_cwd);
+    }
+
+    // 路径不存在：手动规范化 .. 组件
+    normalize_path(&absolute).starts_with(&resolved_cwd)
+}
+
+/// 手动规范化路径中的 `.` 和 `..` 组件（不解析符号链接）。
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            std::path::Component::CurDir => {}
+            comp => components.push(comp),
+        }
+    }
+    components.iter().collect()
 }

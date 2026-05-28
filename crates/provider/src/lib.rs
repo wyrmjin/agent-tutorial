@@ -140,16 +140,8 @@ pub trait Provider: Send + Sync {
         &self,
         messages: &[Message],
         tools: &[ToolSpec],
-        system_prompt: &str,
     ) -> anyhow::Result<Box<dyn StreamChunkIterator>>;
-
-    /// Non-streaming chat for simple requests.
-    async fn chat(
-        &self,
-        messages: &[Message],
-        system_prompt: &str,
-    ) -> anyhow::Result<String>;
-
+    
     /// Which provider this is.
     fn provider_type(&self) -> ProviderType;
 }

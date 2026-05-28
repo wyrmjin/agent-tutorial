@@ -405,27 +405,26 @@ impl Tool for BashTool {
         let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
         if command.is_empty() {
-            return ToolOutput {
-                content: "Error: command parameter is required".to_string(),
-                is_error: true,
-            };
+            return ToolOutput::error("Error: command parameter is required");
         }
 
         // 危险命令安全检查
         if let Some(reason) = Self::check_dangerous(command) {
             warn!(%command, %reason, "dangerous command blocked");
-            return ToolOutput {
-                content: format!("安全限制：{reason}\n被拦截的命令: {command}"),
-                is_error: true,
-            };
+            return ToolOutput::error(format!("安全限制：{reason}\n被拦截的命令: {command}"));
         }
 
         info!(%command, "bash execute start");
 
+        let cwd = match std::env::current_dir() {
+            Ok(d) => d,
+            Err(e) => return ToolOutput::error(format!("无法获取当前工作目录: {e}")),
+        };
+
         match tokio::time::timeout(
             self.timeout,
             tokio::process::Command::new("bash")
-                .current_dir(std::env::current_dir().unwrap())
+                .current_dir(&cwd)
                 .args(["-c", command])
                 .output(),
         )
@@ -433,17 +432,11 @@ impl Tool for BashTool {
         {
             Err(_) => {
                 warn!(%command, timeout = ?self.timeout, "bash command timed out");
-                ToolOutput {
-                    content: format!("命令超时 ({:?})", self.timeout),
-                    is_error: true,
-                }
+                ToolOutput::error(format!("命令超时 ({:?})", self.timeout))
             }
             Ok(Err(e)) => {
                 error!(%command, error = %e, "bash command failed to execute");
-                ToolOutput {
-                    content: format!("执行失败: {e}"),
-                    is_error: true,
-                }
+                ToolOutput::error(format!("执行失败: {e}"))
             }
             Ok(Ok(output)) => {
                 let mut result = String::new();
@@ -468,10 +461,7 @@ impl Tool for BashTool {
                     stderr_len = output.stderr.len(),
                     "bash command completed"
                 );
-                ToolOutput {
-                    content: result,
-                    is_error,
-                }
+                ToolOutput::ok_with_status(result, is_error)
             }
         }
     }
@@ -712,7 +702,11 @@ mod tests {
     // ========== execute 方法测试 ==========
 
     fn rt() -> tokio::runtime::Runtime {
-        tokio::runtime::Runtime::new().unwrap()
+        tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .unwrap()
     }
 
     #[test]

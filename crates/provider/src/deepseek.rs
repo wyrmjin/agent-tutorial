@@ -125,7 +125,6 @@ struct ChatChunk {
 
 #[derive(Deserialize, Debug)]
 struct ChoiceDelta {
-    index: u32,
     delta: DeltaContent,
     finish_reason: Option<String>,
 }
@@ -160,28 +159,9 @@ struct PromptTokensDetails {
 struct ApiUsage {
     prompt_tokens: u64,
     completion_tokens: u64,
-    total_tokens: u64,
     prompt_tokens_details: Option<PromptTokensDetails>,
     prompt_cache_hit_tokens: u64,
     prompt_cache_miss_tokens: u64,
-}
-
-#[derive(Deserialize, Debug)]
-struct NonStreamResponse {
-    choices: Vec<NonStreamChoice>,
-    usage: Option<ApiUsage>,
-}
-
-#[derive(Deserialize, Debug)]
-struct NonStreamChoice {
-    message: NonStreamMessage,
-    finish_reason: Option<String>,
-}
-
-#[derive(Deserialize, Debug)]
-struct NonStreamMessage {
-    content: Option<String>,
-    tool_calls: Option<Vec<ToolCallChunk>>,
 }
 
 // ── SSE stream iterator ────────────────────────────────────────────────────
@@ -372,17 +352,9 @@ fn role_str(role: &Role) -> &str {
     }
 }
 
-fn build_api_messages(messages: &[Message], system_prompt: &str) -> Vec<ApiMessage> {
+fn build_api_messages(messages: &[Message]) -> Vec<ApiMessage> {
     let mut api_messages: Vec<ApiMessage> = Vec::new();
 
-    if !system_prompt.is_empty() {
-        api_messages.push(ApiMessage {
-            role: "system".to_string(),
-            content: Some(system_prompt.to_string()),
-            tool_calls: None,
-            tool_call_id: None,
-        });
-    }
 
     for msg in messages {
         let tool_calls: Option<Vec<ToolCallDelta>> = msg.tool_calls.as_ref().map(|tcs| {
@@ -431,9 +403,8 @@ impl Provider for DeepSeekProvider {
         &self,
         messages: &[Message],
         tools: &[ToolSpec],
-        system_prompt: &str,
     ) -> anyhow::Result<Box<dyn StreamChunkIterator>> {
-        let api_messages = build_api_messages(messages, system_prompt);
+        let api_messages = build_api_messages(messages);
         let api_tools = build_api_tools(tools);
 
         let request = ChatRequest {
@@ -462,46 +433,6 @@ impl Provider for DeepSeekProvider {
         Ok(Box::new(DeepSeekStreamIterator::new(response)))
     }
 
-    async fn chat(
-        &self,
-        messages: &[Message],
-        system_prompt: &str,
-    ) -> anyhow::Result<String> {
-        let api_messages = build_api_messages(messages, system_prompt);
-
-        let request = ChatRequest {
-            model: self.config.model.clone(),
-            messages: api_messages,
-            tools: Vec::new(),
-            stream: false,
-        };
-
-        let url = format!("{}/chat/completions", self.config.base_url);
-        let response = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .json(&request)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            error!(%status, %body, "deepseek api error");
-            anyhow::bail!("DeepSeek API error ({status}): {body}");
-        }
-
-        let resp: NonStreamResponse = response.json().await?;
-        let content = resp
-            .choices
-            .first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or("")
-            .to_string();
-
-        Ok(content)
-    }
 
     fn provider_type(&self) -> ProviderType {
         ProviderType::DeepSeek

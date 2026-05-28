@@ -1,9 +1,9 @@
-//! Read file tool — read file contents with line limit and timeout.
+//! Write file tool — write content to files with path safety check.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::{Tool, ToolOutput};
+use crate::{is_within_cwd, Tool, ToolOutput};
 use logger::{debug, error, warn};
 
 pub struct WriteFileTool {
@@ -42,40 +42,36 @@ impl Tool for WriteFileTool {
         let path_str = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
 
         if path_str.is_empty() {
-            return ToolOutput {
-                content: "Error: path parameter is required".to_string(),
-                is_error: true,
-            };
+            return ToolOutput::error("Error: path parameter is required");
         }
         let content_str = input.get("content").and_then(|v| v.as_str()).unwrap_or("");
         if content_str.is_empty() {
-            return ToolOutput {
-                content: "Error: content parameter is required".to_string(),
-                is_error: true,
-            };
+            return ToolOutput::error("Error: content parameter is required");
         }
         let path = PathBuf::from(path_str);
 
         debug!(%path_str, %content_str, "write_file execute start");
 
+        // 路径安全检查：只允许写入当前工作目录内
+        if !is_within_cwd(&path) {
+            warn!(%path_str, "write_file blocked: path outside working directory");
+            return ToolOutput::error(format!(
+                "路径限制：文件 `{path_str}` 不在当前工作目录内，不允许写入。"
+            ));
+        }
+
         // 确保父目录存在
         if let Some(parent) = path.parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
                 error!(dir = %parent.display(), error = %e, "创建目录失败");
-                return ToolOutput {
-                    content: format!("创建目录失败: {e}"),
-                    is_error: true,
-                };
+                return ToolOutput::error(format!("创建目录失败: {e}"));
             }
         }
 
         match tokio::time::timeout(self.timeout, tokio::fs::write(&path, &content_str)).await {
             Err(_) => {
                 warn!(%path_str, timeout = ?self.timeout, "write_file timed out");
-                ToolOutput {
-                    content: format!("写入文件超时 ({:?})", self.timeout),
-                    is_error: true,
-                }
+                ToolOutput::error(format!("写入文件超时 ({:?})", self.timeout))
             }
             Ok(Err(e)) => {
                 error!(%path_str, error = %e, "write_file failed");
@@ -83,21 +79,15 @@ impl Tool for WriteFileTool {
                     std::io::ErrorKind::NotFound => format!("文件不存在: {path_str}"),
                     std::io::ErrorKind::PermissionDenied => format!("没有权限写入: {path_str}"),
                     std::io::ErrorKind::InvalidData => {
-                        format!("无法以文本方式读取，文件可能是二进制或非 UTF-8 编码: {path_str}")
+                        format!("无法以文本方式写入，文件可能是二进制或非 UTF-8 编码: {path_str}")
                     }
-                    _ => format!("读取文件失败: {e}"),
+                    _ => format!("写入文件失败: {e}"),
                 };
-                ToolOutput {
-                    content: msg,
-                    is_error: true,
-                }
+                ToolOutput::error(msg)
             }
             Ok(Ok(())) => {
                 debug!(%path_str, bytes = content_str.len(), "write_file completed");
-                ToolOutput {
-                    content: format!("成功写入文件: {path_str}"),
-                    is_error: false,
-                }
+                ToolOutput::ok(format!("成功写入文件: {path_str}"))
             }
         }
     }
@@ -108,7 +98,10 @@ mod tests {
     use super::*;
 
     fn rt() -> tokio::runtime::Runtime {
-        tokio::runtime::Runtime::new().unwrap()
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -133,7 +126,7 @@ mod tests {
     #[test]
     fn execute_write_file_success() {
         let tool = WriteFileTool::new(5);
-        let tmp = std::env::temp_dir().join("tool_test_write_success.txt");
+        let tmp = std::env::current_dir().unwrap().join("target/test-tmp/tool_test_write_success.txt");
         let path_str = tmp.to_str().unwrap();
 
         let result = rt().block_on(
@@ -153,7 +146,7 @@ mod tests {
     #[test]
     fn execute_creates_parent_directories() {
         let tool = WriteFileTool::new(5);
-        let tmp = std::env::temp_dir().join("tool_test_nested_dir/subdir/test.txt");
+        let tmp = std::env::current_dir().unwrap().join("target/test-tmp/nested/subdir/test.txt");
         let path_str = tmp.to_str().unwrap();
 
         let result = rt().block_on(
@@ -173,7 +166,7 @@ mod tests {
     #[test]
     fn execute_overwrite_existing_file() {
         let tool = WriteFileTool::new(5);
-        let tmp = std::env::temp_dir().join("tool_test_overwrite.txt");
+        let tmp = std::env::current_dir().unwrap().join("target/test-tmp/tool_test_overwrite.txt");
         let path_str = tmp.to_str().unwrap();
 
         // 先写一次
