@@ -5,9 +5,11 @@
 
 pub mod deepseek;
 pub mod error;
+pub mod registry;
 
 pub use deepseek::{DeepSeekConfig, DeepSeekProvider};
 pub use error::ProviderError;
+pub use registry::ProviderRegistry;
 
 use std::fmt;
 
