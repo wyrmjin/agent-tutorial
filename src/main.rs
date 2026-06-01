@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use agent::{Agent, AgentConfig};
+use futures::StreamExt;
 use logger::{Logger, debug, error, info};
 use provider::{DeepSeekConfig, DeepSeekProvider, ProviderRegistry};
 use tool::{BashTool, ReadFileTool, ToolRegistry, WriteFileTool};
@@ -31,6 +32,8 @@ async fn main() -> anyhow::Result<()> {
     tools.register(BashTool::default());
     tools.register(ReadFileTool::default());
     tools.register(WriteFileTool::default());
+
+    let tools = Arc::new(tools);
 
     let os = os_info::get();
     info!(%os, "agent starting");
@@ -95,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
         if agent.has_pending_approval() {
             let approved = is_approved(&input);
             let events = agent
-                .resolve_approval(approved, &input, &config, &tools)
+                .resolve_approval(approved, &input, &config, &*tools)
                 .await?;
 
             for event in events {
@@ -105,11 +108,16 @@ async fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        // 正常执行 agent
-        let events = agent.run(&input, &config, &tools).await?;
+        // 正常执行 agent（流式）
+        let mut handle = agent.run_stream(&input, &config, Arc::clone(&tools));
 
-        for event in events {
-            display_event(event);
+        while let Some(event) = handle.stream_mut().next().await {
+            match &event {
+                agent::AgentEvent::Done { messages } => {
+                    agent.set_history(messages.clone());
+                }
+                _ => display_event(event),
+            }
         }
 
         println!();
@@ -173,6 +181,16 @@ fn display_event(event: agent::AgentEvent) {
             println!("\n⚠️  {message}");
             println!("   文件路径: {path}");
             println!("   是否同意读取？(同意/拒绝)");
+        }
+        agent::AgentEvent::Error { message, recoverable } => {
+            if recoverable {
+                println!("\n⚠️  可恢复错误: {message}");
+            } else {
+                println!("\n❌ 错误: {message}");
+            }
+        }
+        agent::AgentEvent::Done { .. } => {
+            // Done 事件在调用处处理，这里不显示
         }
     }
 }
