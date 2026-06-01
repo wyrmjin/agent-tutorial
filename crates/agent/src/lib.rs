@@ -74,6 +74,71 @@ pub enum AgentEvent {
     },
     /// The conversation turn is complete.
     TurnEnd { usage: provider::Usage },
+    /// An error occurred during execution.
+    Error {
+        message: String,
+        /// If true, the agent can continue; if false, the agent must stop.
+        recoverable: bool,
+    },
+    /// The agent has finished processing. This is always the last event.
+    Done {
+        messages: Vec<provider::Message>,
+    },
+}
+
+/// Structured result returned after the agent finishes.
+#[derive(Debug, Clone)]
+pub struct AgentResult {
+    pub messages: Vec<provider::Message>,
+    pub total_turns: usize,
+    pub usage: provider::Usage,
+}
+
+impl Default for AgentResult {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            total_turns: 0,
+            usage: provider::Usage::default(),
+        }
+    }
+}
+
+/// Control messages that can be sent to a running agent.
+pub enum SteeringMessage {
+    /// Abort the agent execution.
+    Abort,
+    /// Inject a message into the conversation history.
+    InjectMessage(provider::Message),
+}
+
+/// Handle to a running agent. Provides the event stream plus control methods.
+pub struct AgentHandle {
+    stream: event_stream::EventStream<AgentEvent, AgentResult>,
+    abort_tx: tokio::sync::mpsc::UnboundedSender<()>,
+    steer_tx: tokio::sync::mpsc::UnboundedSender<SteeringMessage>,
+}
+
+impl AgentHandle {
+    /// Get a mutable reference to the event stream for async iteration.
+    pub fn stream_mut(&mut self) -> &mut event_stream::EventStream<AgentEvent, AgentResult> {
+        &mut self.stream
+    }
+
+    /// Request the agent to abort.
+    pub fn abort(&self) {
+        let _ = self.abort_tx.send(());
+    }
+
+    /// Inject a message into the agent's conversation.
+    pub fn inject(&self, msg: provider::Message) {
+        let _ = self.steer_tx.send(SteeringMessage::InjectMessage(msg));
+    }
+
+    /// Check if the stream is done.
+    pub fn is_done(&self) -> bool {
+        self.stream.is_done()
+    }
 }
 
 /// Saved state for a tool call waiting for user approval.
