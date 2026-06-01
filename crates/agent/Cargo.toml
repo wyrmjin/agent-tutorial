@@ -13,3 +13,6 @@ logger = { path = "../logger" }
 futures = "0.3"
 tokio = { version = "1", features = ["sync", "macros", "rt"] }
 tokio-stream = "0.1"
+
+[dev-dependencies]
+async-trait = "0.1"
