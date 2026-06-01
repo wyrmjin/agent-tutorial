@@ -183,6 +183,11 @@ impl Agent {
         &self.history
     }
 
+    /// Set the conversation history (called after stream completes).
+    pub fn set_history(&mut self, history: Vec<provider::Message>) {
+        self.history = history;
+    }
+
     /// Check if the agent is waiting for user approval.
     pub fn has_pending_approval(&self) -> bool {
         self.pending_approval.is_some()
@@ -215,6 +220,51 @@ impl Agent {
         self.run_loop(config, tools, &tool_specs, 0, &mut events)
             .await?;
         Ok(events)
+    }
+
+    /// Run one turn: spawn the agent loop in a background task and return
+    /// a handle for streaming consumption and control.
+    pub fn run_stream(
+        &mut self,
+        user_input: &str,
+        config: &AgentConfig,
+        tools: Arc<ToolRegistry>,
+    ) -> AgentHandle {
+        let (sender, event_stream) = event_stream::EventStream::new();
+        let (abort_tx, abort_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (steer_tx, steer_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let mut history = std::mem::take(&mut self.history);
+        history.push(provider::Message {
+            role: provider::Role::User,
+            content: user_input.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+
+        let provider = Arc::clone(&self.provider);
+        let tool_specs = tools.to_tool_specs();
+        let max_rounds = config.max_tool_rounds;
+
+        tokio::spawn(async move {
+            Self::run_loop_bg(
+                provider,
+                history,
+                tool_specs,
+                tools,
+                max_rounds,
+                sender,
+                abort_rx,
+                steer_rx,
+            )
+            .await;
+        });
+
+        AgentHandle {
+            stream: event_stream,
+            abort_tx,
+            steer_tx,
+        }
     }
 
     /// Resolve a pending approval and continue the agent loop.
@@ -451,5 +501,203 @@ impl Agent {
             });
         }
         None
+    }
+
+    /// Background agent loop — runs inside a tokio::spawn task.
+    async fn run_loop_bg(
+        provider: Arc<dyn Provider>,
+        history: Vec<provider::Message>,
+        tool_specs: Vec<provider::ToolSpec>,
+        tools: Arc<ToolRegistry>,
+        max_rounds: usize,
+        sender: event_stream::EventStreamSender<AgentEvent, AgentResult>,
+        mut abort_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+        mut steer_rx: tokio::sync::mpsc::UnboundedReceiver<SteeringMessage>,
+    ) {
+        let mut history = history;
+        let mut total_turns = 0;
+        let mut total_usage = provider::Usage::default();
+
+        for round in 0..max_rounds {
+            // 1. Check abort signal
+            if abort_rx.try_recv().is_ok() {
+                sender.push(AgentEvent::Error {
+                    message: "Agent aborted by user".to_string(),
+                    recoverable: false,
+                });
+                break;
+            }
+
+            // 2. Process injected messages
+            while let Ok(SteeringMessage::InjectMessage(msg)) = steer_rx.try_recv() {
+                history.push(msg);
+            }
+
+            logger::info!("starting round {}", round + 1);
+
+            // 3. Call LLM (streaming)
+            let stream_result = provider.stream_chat(&history, &tool_specs).await;
+
+            let mut stream = match stream_result {
+                Ok(s) => s,
+                Err(e) => {
+                    sender.push(AgentEvent::Error {
+                        message: format!("Provider error: {e}"),
+                        recoverable: false,
+                    });
+                    break;
+                }
+            };
+
+            let mut assistant_content = String::new();
+            let mut tool_requests: Vec<(String, String, serde_json::Value)> = Vec::new();
+            let mut stop_reason: Option<provider::StopReason> = None;
+            let mut usage = None;
+
+            while let Ok(Some(chunk)) = stream.next().await {
+                match chunk {
+                    provider::StreamChunk::Text(text) => {
+                        assistant_content.push_str(&text);
+                        sender.push(AgentEvent::Text(text));
+                    }
+                    provider::StreamChunk::ToolUse { id, name, input } => {
+                        tool_requests.push((id, name, input));
+                    }
+                    provider::StreamChunk::ToolUseEnd => {}
+                    provider::StreamChunk::Finished {
+                        stop_reason: sr,
+                        usage: u,
+                    } => {
+                        stop_reason = Some(sr);
+                        usage = Some(u.clone());
+                        total_usage.input_tokens += u.input_tokens;
+                        total_usage.output_tokens += u.output_tokens;
+                    }
+                }
+            }
+
+            // 4. Build assistant message
+            match stop_reason {
+                Some(provider::StopReason::EndTurn) if tool_requests.is_empty() => {
+                    if !assistant_content.is_empty() {
+                        history.push(provider::Message {
+                            role: provider::Role::Assistant,
+                            content: assistant_content,
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+                    }
+                    if let Some(u) = usage {
+                        logger::info!(
+                            round = round + 1,
+                            input_tokens = u.input_tokens,
+                            output_tokens = u.output_tokens,
+                            "turn complete"
+                        );
+                        sender.push(AgentEvent::TurnEnd { usage: u });
+                    }
+                    total_turns += 1;
+                    break;
+                }
+                _ => {
+                    let tool_calls: Vec<provider::ToolCallRequest> = tool_requests
+                        .iter()
+                        .map(|(id, name, input)| provider::ToolCallRequest {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                        })
+                        .collect();
+
+                    if !tool_calls.is_empty() {
+                        history.push(provider::Message {
+                            role: provider::Role::Assistant,
+                            content: assistant_content,
+                            tool_calls: Some(tool_calls.clone()),
+                            tool_call_id: None,
+                        });
+
+                        // 5. Execute tools
+                        for tc in &tool_calls {
+                            sender.push(AgentEvent::ToolRequest {
+                                id: tc.id.clone(),
+                                name: tc.name.clone(),
+                                input: tc.input.clone(),
+                            });
+
+                            logger::info!(tool = %tc.name, tool_id = %tc.id, "executing tool");
+
+                            let output = match tools.execute(&tc.name, tc.input.clone()).await {
+                                Some(out) => out,
+                                None => tool::ToolOutput::error(format!("未知工具: {}", tc.name)),
+                            };
+
+                            if output.needs_approval {
+                                sender.push(AgentEvent::ApprovalRequired {
+                                    tool_call_id: tc.id.clone(),
+                                    tool_name: tc.name.clone(),
+                                    path: output.approval_path.clone().unwrap_or_default(),
+                                    message: output.content.clone(),
+                                });
+                                history.push(provider::Message::tool_result(
+                                    &tc.id,
+                                    "Approval required but auto-denied in streaming mode",
+                                ));
+                                sender.push(AgentEvent::ToolResponse {
+                                    id: tc.id.clone(),
+                                    content: "Approval required but auto-denied in streaming mode"
+                                        .to_string(),
+                                    is_error: true,
+                                });
+                                continue;
+                            }
+
+                            history
+                                .push(provider::Message::tool_result(&tc.id, &output.content));
+                            sender.push(AgentEvent::ToolResponse {
+                                id: tc.id.clone(),
+                                content: output.content,
+                                is_error: output.is_error,
+                            });
+                        }
+                        total_turns += 1;
+                        continue;
+                    }
+
+                    // No tool calls but not EndTurn (e.g. MaxTokens)
+                    if !assistant_content.is_empty() {
+                        history.push(provider::Message {
+                            role: provider::Role::Assistant,
+                            content: assistant_content,
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+                    }
+                    if let Some(u) = usage {
+                        sender.push(AgentEvent::TurnEnd { usage: u });
+                    }
+                    total_turns += 1;
+                    break;
+                }
+            }
+        }
+
+        if total_turns >= max_rounds {
+            sender.push(AgentEvent::Error {
+                message: format!("Maximum tool rounds exceeded ({max_rounds})"),
+                recoverable: false,
+            });
+        }
+
+        // 6. Send Done event and end the stream
+        let final_messages = history.clone();
+        sender.push(AgentEvent::Done {
+            messages: final_messages.clone(),
+        });
+        sender.end(AgentResult {
+            messages: final_messages,
+            total_turns,
+            usage: total_usage,
+        });
     }
 }
