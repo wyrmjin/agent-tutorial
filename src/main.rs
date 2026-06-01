@@ -182,7 +182,10 @@ fn display_event(event: agent::AgentEvent) {
             println!("   文件路径: {path}");
             println!("   是否同意读取？(同意/拒绝)");
         }
-        agent::AgentEvent::Error { message, recoverable } => {
+        agent::AgentEvent::Error {
+            message,
+            recoverable,
+        } => {
             if recoverable {
                 println!("\n⚠️  可恢复错误: {message}");
             } else {

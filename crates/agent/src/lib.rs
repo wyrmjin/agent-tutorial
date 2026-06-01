@@ -81,9 +81,7 @@ pub enum AgentEvent {
         recoverable: bool,
     },
     /// The agent has finished processing. This is always the last event.
-    Done {
-        messages: Vec<provider::Message>,
-    },
+    Done { messages: Vec<provider::Message> },
 }
 
 /// Structured result returned after the agent finishes.
@@ -248,14 +246,7 @@ impl Agent {
 
         tokio::spawn(async move {
             Self::run_loop_bg(
-                provider,
-                history,
-                tool_specs,
-                tools,
-                max_rounds,
-                sender,
-                abort_rx,
-                steer_rx,
+                provider, history, tool_specs, tools, max_rounds, sender, abort_rx, steer_rx,
             )
             .await;
         });
@@ -322,8 +313,8 @@ impl Agent {
         Ok(events)
     }
 
-    /// Core LLM <-> tool loop. Can be called from `run` (starting round 0)
-    /// or `resolve_approval` (continuing from a paused round).
+    /// Legacy run loop used by `resolve_approval` for the approval flow.
+    /// The new streaming path uses `run_loop_bg` instead.
     async fn run_loop(
         &mut self,
         config: &AgentConfig,
@@ -652,8 +643,7 @@ impl Agent {
                                 continue;
                             }
 
-                            history
-                                .push(provider::Message::tool_result(&tc.id, &output.content));
+                            history.push(provider::Message::tool_result(&tc.id, &output.content));
                             sender.push(AgentEvent::ToolResponse {
                                 id: tc.id.clone(),
                                 content: output.content,

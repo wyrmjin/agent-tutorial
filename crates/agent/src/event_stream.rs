@@ -7,8 +7,8 @@
 //! The [`EventStream`] is the consumer side (async iteration, subscriptions).
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use futures::Stream;
@@ -156,7 +156,10 @@ impl<T: Send + 'static, R: Send + 'static> Stream for EventStream<T, R> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        let rx = this.rx.as_mut().expect("EventStream polled after completion");
+        let rx = this
+            .rx
+            .as_mut()
+            .expect("EventStream polled after completion");
         Pin::new(rx).poll_recv(cx)
     }
 }
