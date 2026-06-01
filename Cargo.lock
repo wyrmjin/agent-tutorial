@@ -10,6 +10,7 @@ dependencies = [
  "logger",
  "provider",
  "serde_json",
+ "thiserror",
  "tool",
 ]
 
@@ -1137,6 +1138,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]

@@ -2,13 +2,35 @@
 //!
 //! The [`Agent`] drives the core loop:
 //! 1. Send user message + history to the LLM
-//! 2. If LLM responds with text → yield to caller
-//! 3. If LLM requests tool use → execute tool, append result, loop back to 1
-//! 4. If LLM ends turn → done
+//! 2. If LLM responds with text -> yield to caller
+//! 3. If LLM requests tool use -> execute tool, append result, loop back to 1
+//! 4. If LLM ends turn -> done
+
+use std::sync::Arc;
 
 use logger::{debug, info, warn};
-use provider::{Message, Provider, Role, StopReason, StreamChunk, ToolCallRequest};
+use provider::{Message, Provider, ProviderError, Role, StopReason, StreamChunk, ToolCallRequest};
 use tool::ToolRegistry;
+
+/// Errors that can occur during agent execution.
+#[derive(Debug, thiserror::Error)]
+pub enum AgentError {
+    /// An error from the LLM provider.
+    #[error("Provider error: {0}")]
+    Provider(#[from] ProviderError),
+
+    /// Maximum tool rounds exceeded.
+    #[error("Maximum tool rounds exceeded ({max})")]
+    MaxRoundsExceeded { max: usize },
+
+    /// A tool was not found in the registry.
+    #[error("Unknown tool: {name}")]
+    UnknownTool { name: String },
+
+    /// User denied the approval.
+    #[error("User denied approval: {reason}")]
+    ApprovalDenied { reason: String },
+}
 
 /// Configuration for an agent run.
 #[derive(Debug, Clone)]
@@ -63,15 +85,16 @@ struct PendingApproval {
 }
 
 /// The main agent that runs the conversation loop.
-pub struct Agent<P: Provider> {
-    provider: P,
+pub struct Agent {
+    provider: Arc<dyn Provider>,
     history: Vec<Message>,
     /// Tool call waiting for user approval. When set, the agent loop is paused.
     pending_approval: Option<PendingApproval>,
 }
 
-impl<P: Provider> Agent<P> {
-    pub fn new(provider: P, system_prompt: String) -> Self {
+impl Agent {
+    /// Create a new agent with the given provider and system prompt.
+    pub fn new(provider: Arc<dyn Provider>, system_prompt: String) -> Self {
         let mut history = Vec::new();
         if !system_prompt.is_empty() {
             history.push(Message {
@@ -98,14 +121,14 @@ impl<P: Provider> Agent<P> {
         self.pending_approval.is_some()
     }
 
-    /// Run one turn: given user input, loop through LLM ↔ tool calls
+    /// Run one turn: given user input, loop through LLM <-> tool calls
     /// and yield events to the caller.
     pub async fn run(
         &mut self,
         user_input: &str,
         config: &AgentConfig,
         tools: &ToolRegistry,
-    ) -> anyhow::Result<Vec<AgentEvent>> {
+    ) -> Result<Vec<AgentEvent>, AgentError> {
         let mut events = Vec::new();
 
         self.history.push(Message {
@@ -122,7 +145,8 @@ impl<P: Provider> Agent<P> {
         );
 
         let tool_specs = tools.to_tool_specs();
-        self.run_loop(config, tools, &tool_specs, 0, &mut events).await?;
+        self.run_loop(config, tools, &tool_specs, 0, &mut events)
+            .await?;
         Ok(events)
     }
 
@@ -134,7 +158,7 @@ impl<P: Provider> Agent<P> {
         user_input: &str,
         config: &AgentConfig,
         tools: &ToolRegistry,
-    ) -> anyhow::Result<Vec<AgentEvent>> {
+    ) -> Result<Vec<AgentEvent>, AgentError> {
         let pending = self
             .pending_approval
             .take()
@@ -152,9 +176,7 @@ impl<P: Provider> Agent<P> {
                 None => tool::ToolOutput::error(format!("未知工具: {}", pending.name)),
             }
         } else {
-            tool::ToolOutput::error(format!(
-                "用户拒绝了此操作: {user_input}"
-            ))
+            tool::ToolOutput::error(format!("用户拒绝了此操作: {user_input}"))
         };
 
         self.history
@@ -168,12 +190,10 @@ impl<P: Provider> Agent<P> {
 
         // Execute remaining tool calls that were queued behind the approved one
         let round = pending.round;
-        if let Some(pending_approval) = self.execute_tool_batch(
-            &pending.remaining_calls,
-            round,
-            tools,
-            &mut events,
-        ).await {
+        if let Some(pending_approval) = self
+            .execute_tool_batch(&pending.remaining_calls, round, tools, &mut events)
+            .await
+        {
             self.pending_approval = Some(pending_approval);
             return Ok(events);
         }
@@ -185,7 +205,7 @@ impl<P: Provider> Agent<P> {
         Ok(events)
     }
 
-    /// Core LLM ↔ tool loop. Can be called from `run` (starting round 0)
+    /// Core LLM <-> tool loop. Can be called from `run` (starting round 0)
     /// or `resolve_approval` (continuing from a paused round).
     async fn run_loop(
         &mut self,
@@ -194,14 +214,16 @@ impl<P: Provider> Agent<P> {
         tool_specs: &[provider::ToolSpec],
         mut round: usize,
         events: &mut Vec<AgentEvent>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), AgentError> {
         loop {
             if round >= config.max_tool_rounds {
                 warn!(
                     max_rounds = config.max_tool_rounds,
                     "reached maximum tool rounds"
                 );
-                break;
+                return Err(AgentError::MaxRoundsExceeded {
+                    max: config.max_tool_rounds,
+                });
             }
             round += 1;
             info!("starting round {}", round);
@@ -275,12 +297,10 @@ impl<P: Provider> Agent<P> {
                             tool_call_id: None,
                         });
 
-                        if let Some(pending_approval) = self.execute_tool_batch(
-                            &tool_calls,
-                            round,
-                            tools,
-                            events,
-                        ).await {
+                        if let Some(pending_approval) = self
+                            .execute_tool_batch(&tool_calls, round, tools, events)
+                            .await
+                        {
                             self.pending_approval = Some(pending_approval);
                             return Ok(());
                         }
@@ -309,8 +329,6 @@ impl<P: Provider> Agent<P> {
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Execute a batch of tool calls. Returns `Some(PendingApproval)` if any tool

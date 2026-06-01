@@ -13,11 +13,11 @@ pub use registry::ProviderRegistry;
 
 use std::fmt;
 
-pub enum ApiType{
+pub enum ApiType {
     openai_completions,
     openai_responses,
     openai_codex_responses,
-    anthropic_messages
+    anthropic_messages,
 }
 
 /// Supported LLM provider types.
@@ -151,8 +151,8 @@ pub trait Provider: Send + Sync {
         &self,
         messages: &[Message],
         tools: &[ToolSpec],
-    ) -> anyhow::Result<Box<dyn StreamChunkIterator>>;
-    
+    ) -> Result<Box<dyn StreamChunkIterator>, ProviderError>;
+
     /// Which provider this is.
     fn provider_type(&self) -> ProviderType;
 }
@@ -160,5 +160,5 @@ pub trait Provider: Send + Sync {
 /// Iterator over streaming chunks.
 #[async_trait::async_trait]
 pub trait StreamChunkIterator: Send {
-    async fn next(&mut self) -> anyhow::Result<Option<StreamChunk>>;
+    async fn next(&mut self) -> Result<Option<StreamChunk>, ProviderError>;
 }

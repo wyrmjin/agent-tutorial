@@ -7,16 +7,16 @@ use std::collections::HashMap;
 use std::pin::Pin;
 
 use bytes::Bytes;
-use futures::stream::Stream;
 use futures::StreamExt;
+use futures::stream::Stream;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use logger::{debug, error, trace};
+use logger::{debug, error, info, trace};
 
 use crate::{
-    Message, Provider, ProviderType, Role, StopReason, StreamChunk, StreamChunkIterator,
-    ToolSpec, Usage,
+    Message, Provider, ProviderError, ProviderType, Role, StopReason, StreamChunk,
+    StreamChunkIterator, ToolSpec, Usage,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
@@ -166,7 +166,7 @@ struct ApiUsage {
 
 // ── SSE stream iterator ────────────────────────────────────────────────────
 
-type ByteStream = Pin<Box<dyn Stream<Item=Result<Bytes, reqwest::Error>> + Send>>;
+type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
 
 pub struct DeepSeekStreamIterator {
     byte_stream: ByteStream,
@@ -186,7 +186,7 @@ impl DeepSeekStreamIterator {
     }
 
     /// Read the next complete SSE line (minus the "data: " prefix).
-    async fn next_sse_line(&mut self) -> anyhow::Result<Option<String>> {
+    async fn next_sse_line(&mut self) -> Result<Option<String>, ProviderError> {
         loop {
             // Try to extract a line from the buffer
             if let Some(pos) = self.buffer.find('\n') {
@@ -195,6 +195,7 @@ impl DeepSeekStreamIterator {
                 if line.is_empty() {
                     continue;
                 }
+                info!(line, "sse line");
                 return Ok(Some(line));
             }
 
@@ -219,7 +220,7 @@ impl DeepSeekStreamIterator {
 
 #[async_trait::async_trait]
 impl StreamChunkIterator for DeepSeekStreamIterator {
-    async fn next(&mut self) -> anyhow::Result<Option<StreamChunk>> {
+    async fn next(&mut self) -> Result<Option<StreamChunk>, ProviderError> {
         if self.done {
             return Ok(None);
         }
@@ -240,7 +241,8 @@ impl StreamChunkIterator for DeepSeekStreamIterator {
                 continue;
             };
 
-            let chunk: ChatChunk = serde_json::from_str(data)?;
+            let chunk: ChatChunk =
+                serde_json::from_str(data).map_err(|e| ProviderError::Parse(e.to_string()))?;
 
             for choice in &chunk.choices {
                 let delta = &choice.delta;
@@ -276,11 +278,9 @@ impl StreamChunkIterator for DeepSeekStreamIterator {
                 if let Some(ref reason) = choice.finish_reason {
                     // Flush pending tool calls first
                     if !self.pending_tool_calls.is_empty() {
-                        let indices: Vec<u32> =
-                            self.pending_tool_calls.keys().copied().collect();
+                        let indices: Vec<u32> = self.pending_tool_calls.keys().copied().collect();
                         if let Some(&idx) = indices.first() {
-                            let (id, name, args) =
-                                self.pending_tool_calls.remove(&idx).unwrap();
+                            let (id, name, args) = self.pending_tool_calls.remove(&idx).unwrap();
                             if let (Some(id), Some(name)) = (id, name) {
                                 let input: serde_json::Value = if args.is_empty() {
                                     serde_json::Value::Object(serde_json::Map::new())
@@ -355,7 +355,6 @@ fn role_str(role: &Role) -> &str {
 fn build_api_messages(messages: &[Message]) -> Vec<ApiMessage> {
     let mut api_messages: Vec<ApiMessage> = Vec::new();
 
-
     for msg in messages {
         let tool_calls: Option<Vec<ToolCallDelta>> = msg.tool_calls.as_ref().map(|tcs| {
             tcs.iter()
@@ -374,7 +373,11 @@ fn build_api_messages(messages: &[Message]) -> Vec<ApiMessage> {
 
         api_messages.push(ApiMessage {
             role: role_str(&msg.role).to_string(),
-            content: if msg.content.is_empty() { None } else { Some(msg.content.clone()) },
+            content: if msg.content.is_empty() {
+                None
+            } else {
+                Some(msg.content.clone())
+            },
             tool_calls,
             tool_call_id: msg.tool_call_id.clone(),
         });
@@ -403,7 +406,7 @@ impl Provider for DeepSeekProvider {
         &self,
         messages: &[Message],
         tools: &[ToolSpec],
-    ) -> anyhow::Result<Box<dyn StreamChunkIterator>> {
+    ) -> Result<Box<dyn StreamChunkIterator>, ProviderError> {
         let api_messages = build_api_messages(messages);
         let api_tools = build_api_tools(tools);
 
@@ -427,12 +430,14 @@ impl Provider for DeepSeekProvider {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             error!(%status, %body, "deepseek api error");
-            anyhow::bail!("DeepSeek API error ({status}): {body}");
+            return Err(ProviderError::Api {
+                status: status.as_u16(),
+                message: body,
+            });
         }
         debug!(?response, "api_response");
         Ok(Box::new(DeepSeekStreamIterator::new(response)))
     }
-
 
     fn provider_type(&self) -> ProviderType {
         ProviderType::DeepSeek

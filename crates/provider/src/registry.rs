@@ -79,7 +79,7 @@ mod tests {
             &self,
             _messages: &[crate::Message],
             _tools: &[crate::ToolSpec],
-        ) -> anyhow::Result<Box<dyn crate::StreamChunkIterator>> {
+        ) -> Result<Box<dyn crate::StreamChunkIterator>, crate::ProviderError> {
             unimplemented!("mock")
         }
 

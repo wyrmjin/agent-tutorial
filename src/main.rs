@@ -1,16 +1,30 @@
+use std::sync::Arc;
+
 use agent::{Agent, AgentConfig};
-use provider::{DeepSeekConfig, DeepSeekProvider};
+use logger::{Logger, debug, error, info};
+use provider::{DeepSeekConfig, DeepSeekProvider, ProviderRegistry};
 use tool::{BashTool, ReadFileTool, ToolRegistry, WriteFileTool};
-use logger::{debug, error, info, Logger};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     let _log_guard = Logger::builder().init()?;
+
     let api_key =
         std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY must be set in .env file");
 
-    let provider = DeepSeekProvider::new(DeepSeekConfig::new(api_key).with_model("deepseek-chat"));
+    // 使用 ProviderRegistry 注册 provider
+    let mut provider_registry = ProviderRegistry::new();
+    provider_registry.register(
+        "deepseek",
+        Arc::new(DeepSeekProvider::new(
+            DeepSeekConfig::new(api_key).with_model("deepseek-chat"),
+        )),
+    );
+
+    let provider = provider_registry
+        .default_provider()
+        .expect("no provider registered");
 
     // 注册工具
     let mut tools = ToolRegistry::new();
@@ -110,7 +124,18 @@ fn is_approved(input: &str) -> bool {
     let trimmed = lower.trim();
     matches!(
         trimmed,
-        "同意" | "允许" | "可以" | "yes" | "y" | "ok" | "批准" | "sure" | "go ahead" | "好的" | "没问题" | "当然"
+        "同意"
+            | "允许"
+            | "可以"
+            | "yes"
+            | "y"
+            | "ok"
+            | "批准"
+            | "sure"
+            | "go ahead"
+            | "好的"
+            | "没问题"
+            | "当然"
     )
 }
 
@@ -122,11 +147,19 @@ fn display_event(event: agent::AgentEvent) {
         agent::AgentEvent::ToolRequest { name, .. } => {
             println!("\n[调用工具: {name}]");
         }
-        agent::AgentEvent::ToolResponse { content, is_error, .. } => {
+        agent::AgentEvent::ToolResponse {
+            content, is_error, ..
+        } => {
             if is_error {
-                println!("[工具错误: {}]", content.chars().take(200).collect::<String>());
+                println!(
+                    "[工具错误: {}]",
+                    content.chars().take(200).collect::<String>()
+                );
             } else {
-                println!("[工具结果: {}]", content.chars().take(200).collect::<String>());
+                println!(
+                    "[工具结果: {}]",
+                    content.chars().take(200).collect::<String>()
+                );
             }
         }
         agent::AgentEvent::TurnEnd { usage } => {
