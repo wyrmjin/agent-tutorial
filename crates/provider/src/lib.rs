@@ -4,10 +4,19 @@
 //! (Anthropic, OpenAI, Ollama, etc.).
 
 pub mod deepseek;
+pub mod error;
 
 pub use deepseek::{DeepSeekConfig, DeepSeekProvider};
+pub use error::ProviderError;
 
 use std::fmt;
+
+pub enum ApiType{
+    openai_completions,
+    openai_responses,
+    openai_codex_responses,
+    anthropic_messages
+}
 
 /// Supported LLM provider types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
