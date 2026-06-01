@@ -6,6 +6,8 @@
 //! 3. If LLM requests tool use -> execute tool, append result, loop back to 1
 //! 4. If LLM ends turn -> done
 
+pub mod event_stream;
+
 use std::sync::Arc;
 
 use logger::{debug, info, warn};
