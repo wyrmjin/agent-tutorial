@@ -156,11 +156,16 @@ impl<T: Send + 'static, R: Send + 'static> Stream for EventStream<T, R> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        let rx = this
-            .rx
-            .as_mut()
-            .expect("EventStream polled after completion");
-        Pin::new(rx).poll_recv(cx)
+        let rx = match this.rx.as_mut() {
+            Some(rx) => rx,
+            None => return Poll::Ready(None),
+        };
+        let poll = Pin::new(rx).poll_recv(cx);
+        // Once the receiver is closed, take it so subsequent polls return None.
+        if let Poll::Ready(None) = &poll {
+            this.rx.take();
+        }
+        poll
     }
 }
 

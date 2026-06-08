@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::{is_within_cwd, Tool, ToolOutput};
+use crate::{Tool, ToolOutput, is_within_cwd};
 use logger::{debug, error, warn};
 
 pub struct WriteFileTool {
@@ -107,9 +107,7 @@ mod tests {
     #[test]
     fn execute_empty_path_returns_error() {
         let tool = WriteFileTool::new(5);
-        let result = rt().block_on(
-            tool.execute(serde_json::json!({"content": "hello"})),
-        );
+        let result = rt().block_on(tool.execute(serde_json::json!({"content": "hello"})));
         assert!(result.is_error);
         assert!(result.content.contains("required"));
     }
@@ -117,8 +115,7 @@ mod tests {
     #[test]
     fn execute_empty_content_returns_error() {
         let tool = WriteFileTool::new(5);
-        let result =
-            rt().block_on(tool.execute(serde_json::json!({"path": "/tmp/test.txt"})));
+        let result = rt().block_on(tool.execute(serde_json::json!({"path": "/tmp/test.txt"})));
         assert!(result.is_error);
         assert!(result.content.contains("required"));
     }
@@ -126,7 +123,9 @@ mod tests {
     #[test]
     fn execute_write_file_success() {
         let tool = WriteFileTool::new(5);
-        let tmp = std::env::current_dir().unwrap().join("target/test-tmp/tool_test_write_success.txt");
+        let tmp = std::env::current_dir()
+            .unwrap()
+            .join("target/test-tmp/tool_test_write_success.txt");
         let path_str = tmp.to_str().unwrap();
 
         let result = rt().block_on(
@@ -146,7 +145,9 @@ mod tests {
     #[test]
     fn execute_creates_parent_directories() {
         let tool = WriteFileTool::new(5);
-        let tmp = std::env::current_dir().unwrap().join("target/test-tmp/nested/subdir/test.txt");
+        let tmp = std::env::current_dir()
+            .unwrap()
+            .join("target/test-tmp/nested/subdir/test.txt");
         let path_str = tmp.to_str().unwrap();
 
         let result = rt().block_on(
@@ -166,17 +167,16 @@ mod tests {
     #[test]
     fn execute_overwrite_existing_file() {
         let tool = WriteFileTool::new(5);
-        let tmp = std::env::current_dir().unwrap().join("target/test-tmp/tool_test_overwrite.txt");
+        let tmp = std::env::current_dir()
+            .unwrap()
+            .join("target/test-tmp/tool_test_overwrite.txt");
         let path_str = tmp.to_str().unwrap();
 
         // 先写一次
-        rt().block_on(
-            tool.execute(serde_json::json!({"path": path_str, "content": "first"})),
-        );
+        rt().block_on(tool.execute(serde_json::json!({"path": path_str, "content": "first"})));
         // 覆盖写入
-        let result = rt().block_on(
-            tool.execute(serde_json::json!({"path": path_str, "content": "second"})),
-        );
+        let result =
+            rt().block_on(tool.execute(serde_json::json!({"path": path_str, "content": "second"})));
         assert!(!result.is_error);
 
         let written = std::fs::read_to_string(&tmp).unwrap();

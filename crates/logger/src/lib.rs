@@ -1,8 +1,8 @@
 //! 统一日志系统 — 封装 tracing 配置，提供控制台+文件双输出、双格式。
 
 use std::io;
-use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 pub use tracing::{debug, error, info, trace, warn};
 
@@ -55,16 +55,15 @@ impl Logger {
             .pretty();
 
         // 文件 Layer：JSON 格式，按天滚动
-        let file_appender =
-            tracing_appender::rolling::daily(&self.log_dir, &self.file_prefix);
+        let file_appender = tracing_appender::rolling::daily(&self.log_dir, &self.file_prefix);
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
         let file_layer = tracing_subscriber::fmt::layer()
             .json()
             .with_writer(non_blocking);
 
         // 日志级别过滤：优先读环境变量 LOG_LEVEL，否则用配置值
-        let filter = EnvFilter::try_from_env("LOG_LEVEL")
-            .unwrap_or_else(|_| EnvFilter::new(&self.level));
+        let filter =
+            EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new(&self.level));
 
         tracing_subscriber::registry()
             .with(filter)

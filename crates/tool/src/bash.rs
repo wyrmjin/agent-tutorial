@@ -540,7 +540,10 @@ mod tests {
 
     #[test]
     fn dd_write_to_regular_file_allowed() {
-        assert_eq!(BashTool::check_dangerous("dd if=/dev/zero of=output.bin"), None);
+        assert_eq!(
+            BashTool::check_dangerous("dd if=/dev/zero of=output.bin"),
+            None
+        );
     }
 
     // ========== check_redirect_to_dev ==========
@@ -645,7 +648,10 @@ mod tests {
 
     #[test]
     fn curl_without_pipe_to_shell_allowed() {
-        assert_eq!(BashTool::check_dangerous("curl https://example.com/script.sh"), None);
+        assert_eq!(
+            BashTool::check_dangerous("curl https://example.com/script.sh"),
+            None
+        );
         assert_eq!(BashTool::check_dangerous("curl url -o output.sh"), None);
     }
 
@@ -655,7 +661,9 @@ mod tests {
     fn git_force_push_to_protected_branch_blocked() {
         assert!(BashTool::check_dangerous("git push --force origin main").is_some());
         assert!(BashTool::check_dangerous("git push -f origin master").is_some());
-        assert!(BashTool::check_dangerous("git push --force-with-lease origin production").is_some());
+        assert!(
+            BashTool::check_dangerous("git push --force-with-lease origin production").is_some()
+        );
         assert!(BashTool::check_dangerous("git push --force origin prod").is_some());
         assert!(BashTool::check_dangerous("git push --force origin release").is_some());
     }
@@ -670,10 +678,7 @@ mod tests {
 
     #[test]
     fn git_push_non_force_allowed() {
-        assert_eq!(
-            BashTool::check_dangerous("git push origin main"),
-            None
-        );
+        assert_eq!(BashTool::check_dangerous("git push origin main"), None);
     }
 
     #[test]
@@ -736,8 +741,7 @@ mod tests {
     #[test]
     fn execute_command_with_stderr() {
         let tool = BashTool::new(5);
-        let result =
-            rt().block_on(tool.execute(serde_json::json!({"command": "echo err >&2"})));
+        let result = rt().block_on(tool.execute(serde_json::json!({"command": "echo err >&2"})));
         assert!(result.content.contains("stderr"));
         assert!(result.content.contains("err"));
     }

@@ -2,6 +2,6 @@
 .claude
 .traces
 .idea
-docs/superpowers
+docs
 logs
 .env

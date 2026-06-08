@@ -15,48 +15,40 @@ use serde::{Deserialize, Serialize};
 use logger::{debug, error, info, trace};
 
 use crate::{
-    Message, Provider, ProviderError, ProviderType, Role, StopReason, StreamChunk,
-    StreamChunkIterator, ToolSpec, Usage,
+    ApiProtocol, Message, Provider, ProviderConfig, ProviderError, ProviderType,
+    StopReason, StreamChunk, StreamChunkIterator, ToolSpec, Usage,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 const DEFAULT_MODEL: &str = "deepseek-v4-flash";
 
-/// Configuration for creating a DeepSeek provider.
-#[derive(Clone)]
-pub struct DeepSeekConfig {
-    pub api_key: String,
-    pub base_url: String,
-    pub model: String,
-}
-
-impl DeepSeekConfig {
-    pub fn new(api_key: impl Into<String>) -> Self {
-        Self {
-            api_key: api_key.into(),
-            base_url: DEFAULT_BASE_URL.to_string(),
-            model: DEFAULT_MODEL.to_string(),
-        }
-    }
-
-    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = url.into();
-        self
-    }
-
-    pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = model.into();
-        self
-    }
-}
-
 pub struct DeepSeekProvider {
     client: Client,
-    config: DeepSeekConfig,
+    config: ProviderConfig,
 }
 
 impl DeepSeekProvider {
-    pub fn new(config: DeepSeekConfig) -> Self {
+    /// Create a new DeepSeek provider.
+    ///
+    /// Fills in DeepSeek-specific defaults for any empty fields in `config`:
+    /// - `base_url` → `https://api.deepseek.com`
+    /// - `model` → `deepseek-v4-flash`
+    /// - `protocol` → `ApiProtocol::OpenAI`
+    pub fn new(config: ProviderConfig) -> Self {
+        let config = ProviderConfig {
+            base_url: if config.base_url.is_empty() {
+                DEFAULT_BASE_URL.to_string()
+            } else {
+                config.base_url
+            },
+            model: if config.model.is_empty() {
+                DEFAULT_MODEL.to_string()
+            } else {
+                config.model
+            },
+            protocol: Some(config.protocol.unwrap_or(ApiProtocol::OpenAI)),
+            ..config
+        };
         Self {
             client: Client::new(),
             config,
@@ -139,8 +131,6 @@ struct DeltaContent {
 struct ToolCallChunk {
     index: u32,
     id: Option<String>,
-    #[serde(rename = "type")]
-    call_type: Option<String>,
     function: FunctionChunk,
 }
 
@@ -343,47 +333,52 @@ impl StreamChunkIterator for DeepSeekStreamIterator {
 
 // ── Provider trait implementation ──────────────────────────────────────────
 
-fn role_str(role: &Role) -> &str {
-    match role {
-        Role::System => "system",
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::Tool => "tool",
-    }
-}
-
 fn build_api_messages(messages: &[Message]) -> Vec<ApiMessage> {
-    let mut api_messages: Vec<ApiMessage> = Vec::new();
-
-    for msg in messages {
-        let tool_calls: Option<Vec<ToolCallDelta>> = msg.tool_calls.as_ref().map(|tcs| {
-            tcs.iter()
-                .enumerate()
-                .map(|(i, tc)| ToolCallDelta {
-                    index: i as u32,
-                    id: tc.id.clone(),
-                    call_type: "function".to_string(),
-                    function: FunctionDelta {
-                        name: tc.name.clone(),
-                        arguments: tc.input.to_string(),
-                    },
-                })
-                .collect()
-        });
-
-        api_messages.push(ApiMessage {
-            role: role_str(&msg.role).to_string(),
-            content: if msg.content.is_empty() {
-                None
-            } else {
-                Some(msg.content.clone())
+    messages
+        .iter()
+        .map(|msg| match msg {
+            Message::System { content } => ApiMessage {
+                role: "system".to_string(),
+                content: if content.is_empty() { None } else { Some(content.clone()) },
+                tool_calls: None,
+                tool_call_id: None,
             },
-            tool_calls,
-            tool_call_id: msg.tool_call_id.clone(),
-        });
-    }
-
-    api_messages
+            Message::User { content } => ApiMessage {
+                role: "user".to_string(),
+                content: if content.is_empty() { None } else { Some(content.clone()) },
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            Message::Assistant { content, tool_calls } => {
+                let tc_deltas = tool_calls.as_ref().map(|tcs| {
+                    tcs.iter()
+                        .enumerate()
+                        .map(|(i, tc)| ToolCallDelta {
+                            index: i as u32,
+                            id: tc.id.clone(),
+                            call_type: "function".to_string(),
+                            function: FunctionDelta {
+                                name: tc.name.clone(),
+                                arguments: tc.input.to_string(),
+                            },
+                        })
+                        .collect()
+                });
+                ApiMessage {
+                    role: "assistant".to_string(),
+                    content: if content.is_empty() { None } else { Some(content.clone()) },
+                    tool_calls: tc_deltas,
+                    tool_call_id: None,
+                }
+            },
+            Message::Tool { content, tool_call_id } => ApiMessage {
+                role: "tool".to_string(),
+                content: if content.is_empty() { None } else { Some(content.clone()) },
+                tool_calls: None,
+                tool_call_id: Some(tool_call_id.clone()),
+            },
+        })
+        .collect()
 }
 
 fn build_api_tools(tools: &[ToolSpec]) -> Vec<ApiToolOwned> {

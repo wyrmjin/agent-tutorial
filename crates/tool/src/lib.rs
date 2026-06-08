@@ -74,6 +74,12 @@ pub trait Tool: Send + Sync {
     /// JSON Schema for the tool's parameters.
     fn parameters(&self) -> serde_json::Value;
     /// Execute the tool with the given input.
+    ///
+    /// **Approval contract**: If the tool returns a `ToolOutput` with
+    /// `needs_approval = true`, the tool MUST NOT have performed any
+    /// side effects. The caller will request user approval and, if
+    /// granted, call `approve()` and then `execute()` again. The second
+    /// call should perform the actual operation.
     async fn execute(&self, input: serde_json::Value) -> ToolOutput;
 
     /// 批准工具的待审批操作。默认空实现，由需要审批的工具覆盖。
@@ -117,11 +123,11 @@ impl ToolRegistry {
         }
     }
 
-    /// Build provider ToolSpecs for all registered tools.
-    pub fn to_tool_specs(&self) -> Vec<provider::ToolSpec> {
+    /// Build ai ToolSpecs for all registered tools.
+    pub fn to_tool_specs(&self) -> Vec<ai::ToolSpec> {
         self.tools
             .iter()
-            .map(|(name, tool)| provider::ToolSpec {
+            .map(|(name, tool)| ai::ToolSpec {
                 name: name.clone(),
                 description: tool.description().to_string(),
                 parameters: tool.parameters(),

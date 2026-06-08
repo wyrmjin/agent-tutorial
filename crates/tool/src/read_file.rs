@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::{is_within_cwd, Tool, ToolOutput};
+use crate::{Tool, ToolOutput, is_within_cwd};
 use logger::{debug, error, warn};
 
 pub struct ReadFileTool {
@@ -93,10 +93,7 @@ impl Tool for ReadFileTool {
     }
 
     async fn execute(&self, input: serde_json::Value) -> ToolOutput {
-        let path_str = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let path_str = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
 
         if path_str.is_empty() {
             return ToolOutput::error("Error: path parameter is required");
@@ -148,11 +145,8 @@ impl Tool for ReadFileTool {
                 let line_count = content.lines().count();
                 let result = match limit {
                     Some(n) if n < line_count => {
-                        let truncated: String = content
-                            .lines()
-                            .take(n)
-                            .collect::<Vec<&str>>()
-                            .join("\n");
+                        let truncated: String =
+                            content.lines().take(n).collect::<Vec<&str>>().join("\n");
                         let remaining = line_count - n;
                         let hint = format!(
                             "\n\n--- 文件内容被截断 (已显示 {n} 行 / 共 {line_count} 行，剩余 {remaining} 行) ---"
@@ -219,9 +213,8 @@ mod tests {
         let path = std::env::current_dir()
             .unwrap()
             .join("nonexistent_test_file_12345.txt");
-        let result = rt().block_on(
-            tool.execute(serde_json::json!({"path": path.to_str().unwrap()})),
-        );
+        let result =
+            rt().block_on(tool.execute(serde_json::json!({"path": path.to_str().unwrap()})));
         assert!(result.is_error);
         assert!(result.content.contains("文件不存在"));
         assert!(!result.needs_approval);
@@ -230,9 +223,7 @@ mod tests {
     #[test]
     fn execute_read_file_success() {
         let tool = ReadFileTool::new(5);
-        let manifest = std::env::current_dir()
-            .unwrap()
-            .join("Cargo.toml");
+        let manifest = std::env::current_dir().unwrap().join("Cargo.toml");
         let result =
             rt().block_on(tool.execute(serde_json::json!({"path": manifest.to_str().unwrap()})));
         assert!(!result.is_error);
@@ -242,9 +233,7 @@ mod tests {
     #[test]
     fn execute_with_limit_truncates() {
         let tool = ReadFileTool::new(5);
-        let manifest = std::env::current_dir()
-            .unwrap()
-            .join("Cargo.toml");
+        let manifest = std::env::current_dir().unwrap().join("Cargo.toml");
         let result = rt().block_on(
             tool.execute(serde_json::json!({"path": manifest.to_str().unwrap(), "limit": 1})),
         );
@@ -255,9 +244,7 @@ mod tests {
     #[test]
     fn execute_with_limit_larger_than_file() {
         let tool = ReadFileTool::new(5);
-        let manifest = std::env::current_dir()
-            .unwrap()
-            .join("Cargo.toml");
+        let manifest = std::env::current_dir().unwrap().join("Cargo.toml");
         let result = rt().block_on(
             tool.execute(serde_json::json!({"path": manifest.to_str().unwrap(), "limit": 1000})),
         );
@@ -303,7 +290,8 @@ mod tests {
         std::fs::write(&path, "hello external world").unwrap();
 
         // 第一次读取：被拒绝
-        let result = rt().block_on(tool.execute(serde_json::json!({"path": path.to_str().unwrap()})));
+        let result =
+            rt().block_on(tool.execute(serde_json::json!({"path": path.to_str().unwrap()})));
         assert!(result.needs_approval);
 
         // 批准路径
@@ -311,7 +299,8 @@ mod tests {
         tool.approve(&input);
 
         // 第二次读取：成功
-        let result = rt().block_on(tool.execute(serde_json::json!({"path": path.to_str().unwrap()})));
+        let result =
+            rt().block_on(tool.execute(serde_json::json!({"path": path.to_str().unwrap()})));
         assert!(!result.is_error);
         assert!(result.content.contains("hello external world"));
 

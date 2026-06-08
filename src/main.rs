@@ -3,7 +3,7 @@ use std::sync::Arc;
 use agent::{Agent, AgentConfig};
 use futures::StreamExt;
 use logger::{Logger, debug, error, info};
-use provider::{DeepSeekConfig, DeepSeekProvider, ProviderRegistry};
+use ai::{DeepSeekProvider, ProviderConfig, ProviderRegistry};
 use tool::{BashTool, ReadFileTool, ToolRegistry, WriteFileTool};
 
 #[tokio::main]
@@ -14,18 +14,18 @@ async fn main() -> anyhow::Result<()> {
     let api_key =
         std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY must be set in .env file");
 
-    // 使用 ProviderRegistry 注册 provider
+    // 使用 ProviderRegistry 注册 ai
     let mut provider_registry = ProviderRegistry::new();
     provider_registry.register(
         "deepseek",
         Arc::new(DeepSeekProvider::new(
-            DeepSeekConfig::new(api_key).with_model("deepseek-chat"),
+            ProviderConfig::new(api_key).with_model("deepseek-chat"),
         )),
     );
 
     let provider = provider_registry
         .default_provider()
-        .expect("no provider registered");
+        .expect("no ai registered");
 
     // 注册工具
     let mut tools = ToolRegistry::new();
@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
          - 当前用户: {user}"
     );
     debug!(%system_prompt, "system prompt configured");
-    let mut agent = Agent::new(provider, system_prompt);
+    let agent = Agent::new(provider, system_prompt);
 
     let config = AgentConfig::default();
 
@@ -94,27 +94,44 @@ async fn main() -> anyhow::Result<()> {
             break;
         }
 
-        // 检查是否有待审批的请求，如果有则当前输入就是审批回复
-        if agent.has_pending_approval() {
-            let approved = is_approved(&input);
-            let events = agent
-                .resolve_approval(approved, &input, &config, &*tools)
-                .await?;
-
-            for event in events {
-                display_event(event);
-            }
-            println!();
-            continue;
-        }
-
-        // 正常执行 agent（流式）
+        // 执行 agent（流式）
         let mut handle = agent.run_stream(&input, &config, Arc::clone(&tools));
 
         while let Some(event) = handle.stream_mut().next().await {
             match &event {
-                agent::AgentEvent::Done { messages } => {
-                    agent.set_history(messages.clone());
+                agent::AgentEvent::ApprovalRequired {
+                    tool_call_id,
+                    path,
+                    message,
+                    ..
+                } => {
+                    println!("\n⚠️  {message}");
+                    println!("   文件路径: {path}");
+                    println!("   是否同意读取？(同意/拒绝)");
+
+                    match tokio::task::spawn_blocking(|| {
+                        let mut buf = String::new();
+                        std::io::stdin().read_line(&mut buf).map(|n| (n, buf))
+                    })
+                    .await
+                    {
+                        Ok(Ok((0, _))) => {
+                            handle.deny(tool_call_id.clone(), "EOF".to_string());
+                        }
+                        Ok(Ok((_, buf))) => {
+                            if is_approved(&buf) {
+                                handle.approve(tool_call_id.clone());
+                            } else {
+                                handle.deny(tool_call_id.clone(), buf.trim().to_string());
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            handle.deny(tool_call_id.clone(), format!("输入错误: {e}"));
+                        }
+                        Err(e) => {
+                            handle.deny(tool_call_id.clone(), format!("输入任务失败: {e}"));
+                        }
+                    }
                 }
                 _ => display_event(event),
             }
@@ -177,10 +194,8 @@ fn display_event(event: agent::AgentEvent) {
                 usage.input_tokens, usage.output_tokens
             );
         }
-        agent::AgentEvent::ApprovalRequired { path, message, .. } => {
-            println!("\n⚠️  {message}");
-            println!("   文件路径: {path}");
-            println!("   是否同意读取？(同意/拒绝)");
+        agent::AgentEvent::ApprovalRequired { .. } => {
+            // 已在主循环中内联处理，不会到达这里
         }
         agent::AgentEvent::Error {
             message,
