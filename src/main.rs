@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     provider_registry.register(
         "deepseek",
         Arc::new(DeepSeekProvider::new(
-            ProviderConfig::new(api_key).with_model("deepseek-chat"),
+            ProviderConfig::new(api_key).with_model("deepseek-v4-flash"),
         )),
     );
 
