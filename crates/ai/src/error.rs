@@ -1,11 +1,15 @@
-//! Structured error types for the provider layer.
+//! Structured error types for the ai layer.
 
-/// Errors that can occur in the provider layer.
+/// Errors that can occur in the ai layer.
 #[derive(Debug, thiserror::Error)]
-pub enum ProviderError {
+pub enum AiError {
     /// API request returned a non-success status code.
     #[error("API error ({status}): {message}")]
     Api { status: u16, message: String },
+
+    /// Failed to encode a request body (e.g. parameters not serializable).
+    #[error("Failed to encode request: {0}")]
+    Encode(String),
 
     /// Failed to parse a response from the API.
     #[error("Failed to parse API response: {0}")]

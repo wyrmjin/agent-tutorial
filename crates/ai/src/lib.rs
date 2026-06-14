@@ -9,7 +9,9 @@ pub mod registry;
 pub mod types;
 
 pub use deepseek::DeepSeekProvider;
-pub use error::ProviderError;
+pub use error::AiError;
+/// 临时别名 —— 让尚未迁移的旧代码继续编译, 后续 Task 切换调用方后删除。
+pub use error::AiError as ProviderError;
 pub use registry::ProviderRegistry;
 
 use std::fmt;
