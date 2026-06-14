@@ -1,18 +1,18 @@
-//! LLM Provider abstraction layer.
-//!
-//! Defines the [`Provider`] trait for interacting with different LLM backends
-//! (Anthropic, OpenAI, Ollama, etc.).
+//! AI 通信层(重构进行中)。
 
 pub mod deepseek;
 pub mod error;
+pub mod message;
 pub mod registry;
-pub mod types;
+pub mod stream;
 
 pub use deepseek::DeepSeekProvider;
 pub use error::AiError;
 /// 临时别名 —— 让尚未迁移的旧代码继续编译, 后续 Task 切换调用方后删除。
 pub use error::AiError as ProviderError;
+pub use message::{Message, Role, ToolCallRequest, ToolSpec};
 pub use registry::ProviderRegistry;
+pub use stream::{StopReason, StreamChunk, StreamChunkIterator, Usage};
 
 use std::fmt;
 
@@ -106,128 +106,6 @@ impl fmt::Display for ProviderType {
     }
 }
 
-/// A single message in a conversation.
-#[derive(Debug, Clone)]
-pub enum Message {
-    /// A system prompt message.
-    System { content: String },
-    /// A user message.
-    User { content: String },
-    /// An assistant (LLM) response message.
-    Assistant {
-        content: String,
-        /// Tool calls requested by the assistant.
-        tool_calls: Option<Vec<ToolCallRequest>>,
-    },
-    /// A tool execution result message.
-    Tool {
-        content: String,
-        /// ID of the tool call this result corresponds to.
-        tool_call_id: String,
-    },
-}
-
-impl Message {
-    /// Returns the role of this message.
-    pub fn role(&self) -> Role {
-        match self {
-            Message::System { .. } => Role::System,
-            Message::User { .. } => Role::User,
-            Message::Assistant { .. } => Role::Assistant,
-            Message::Tool { .. } => Role::Tool,
-        }
-    }
-
-    /// Returns the content of this message, regardless of variant.
-    pub fn content(&self) -> &str {
-        match self {
-            Message::System { content }
-            | Message::User { content }
-            | Message::Assistant { content, .. }
-            | Message::Tool { content, .. } => content,
-        }
-    }
-
-    pub fn user(content: impl Into<String>) -> Self {
-        Message::User {
-            content: content.into(),
-        }
-    }
-
-    pub fn system(content: impl Into<String>) -> Self {
-        Message::System {
-            content: content.into(),
-        }
-    }
-
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Message::Assistant {
-            content: content.into(),
-            tool_calls: None,
-        }
-    }
-
-    pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Message::Tool {
-            content: content.into(),
-            tool_call_id: tool_call_id.into(),
-        }
-    }
-}
-
-/// A tool call request from the assistant.
-#[derive(Debug, Clone)]
-pub struct ToolCallRequest {
-    pub id: String,
-    pub name: String,
-    pub input: serde_json::Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Role {
-    System,
-    User,
-    Assistant,
-    Tool,
-}
-
-/// Tool definition passed to the LLM.
-#[derive(Debug, Clone)]
-pub struct ToolSpec {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
-}
-
-/// A streaming chunk from the LLM.
-#[derive(Debug, Clone)]
-pub enum StreamChunk {
-    Text(String),
-    ToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
-    },
-    Finished {
-        stop_reason: StopReason,
-        usage: Usage,
-    },
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Usage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub extra: std::collections::HashMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StopReason {
-    EndTurn,
-    ToolUse,
-    MaxTokens,
-}
-
 /// The core abstraction over LLM backends.
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
@@ -240,10 +118,4 @@ pub trait Provider: Send + Sync {
 
     /// Which provider this is.
     fn provider_type(&self) -> ProviderType;
-}
-
-/// Iterator over streaming chunks.
-#[async_trait::async_trait]
-pub trait StreamChunkIterator: Send {
-    async fn next(&mut self) -> Result<Option<StreamChunk>, ProviderError>;
 }
