@@ -12,7 +12,7 @@ pub use error::AiError;
 pub use error::AiError as ProviderError;
 pub use message::{Message, Role, ToolCallRequest, ToolSpec};
 pub use registry::ProviderRegistry;
-pub use stream::{StopReason, StreamChunk, StreamChunkIterator, Usage};
+pub use stream::{SseFrameReader, StopReason, StreamChunk, StreamChunkIterator, Usage};
 
 use std::fmt;
 
