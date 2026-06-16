@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AiError;
 use crate::message::{Message, ToolSpec};
-use crate::protocol::{Protocol, ProtocolKind, SamplingParams};
+use crate::protocol::{Protocol, ProtocolKind, SamplingParams, ThinkingLevel};
 use crate::stream::{SseFrameReader, StopReason, StreamChunk, StreamDecoder, Usage};
 
 pub struct OpenAiCompletionsProtocol;
@@ -38,6 +38,23 @@ struct ChatRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f64>,
+    /// 思考强度(DeepSeek/OpenAI reasoning_effort)。仅当 thinking_level 非 None 时设置。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
+}
+
+/// 把统一的 ThinkingLevel 翻译成 DeepSeek/OpenAI 线上的 reasoning_effort 字符串。
+/// (参考 DeepSeek thinking_mode 文档: low/medium→high, xhigh→max。这里直传原值,
+///  让服务端做兼容映射, 与文档语义一致。)
+fn reasoning_effort_for(level: ThinkingLevel) -> &'static str {
+    match level {
+        ThinkingLevel::None => "low",
+        ThinkingLevel::Low => "low",
+        ThinkingLevel::Medium => "medium",
+        ThinkingLevel::High => "high",
+        ThinkingLevel::Xhigh => "xhigh",
+        ThinkingLevel::Max => "max",
+    }
 }
 
 #[derive(Serialize)]
@@ -170,6 +187,9 @@ impl Protocol for OpenAiCompletionsProtocol {
             stream: true,
             max_tokens: params.max_tokens,
             temperature: params.temperature,
+            reasoning_effort: params
+                .thinking_level
+                .map(|level| reasoning_effort_for(level).to_string()),
         };
         serde_json::to_value(&request).map_err(|e| AiError::Encode(e.to_string()))
     }
@@ -404,6 +424,49 @@ mod build_body_tests {
             .unwrap();
         assert_eq!(body["max_tokens"], 256);
         assert_eq!(body["temperature"], 0.7);
+    }
+
+    #[test]
+    fn thinking_level_emits_reasoning_effort() {
+        let p = OpenAiCompletionsProtocol::new();
+        // None → 不发 reasoning_effort
+        let none_body = p
+            .build_body(
+                "m",
+                &SamplingParams {
+                    thinking_level: None,
+                    ..Default::default()
+                },
+                &[Message::user("x")],
+                &[],
+            )
+            .unwrap();
+        assert!(none_body.get("reasoning_effort").is_none());
+
+        // 各级别 → 对应 effort 字符串
+        for (level, effort) in [
+            (crate::protocol::ThinkingLevel::Low, "low"),
+            (crate::protocol::ThinkingLevel::Medium, "medium"),
+            (crate::protocol::ThinkingLevel::High, "high"),
+            (crate::protocol::ThinkingLevel::Xhigh, "xhigh"),
+            (crate::protocol::ThinkingLevel::Max, "max"),
+        ] {
+            let body = p
+                .build_body(
+                    "m",
+                    &SamplingParams {
+                        thinking_level: Some(level),
+                        ..Default::default()
+                    },
+                    &[Message::user("x")],
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(
+                body["reasoning_effort"], effort,
+                "ThinkingLevel {level:?} 应映射到 reasoning_effort={effort:?}"
+            );
+        }
     }
 }
 
