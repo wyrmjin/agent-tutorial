@@ -18,7 +18,7 @@ pub use message::{Message, Role, ToolCallRequest, ToolSpec};
 pub use model::{Capabilities, LanguageModel, Model};
 pub use provider::{AuthStyle, Endpoint, GenericProvider};
 pub use protocol::{Protocol, ProtocolKind, SamplingParams, ThinkingLevel};
-pub use registry::ProviderRegistry;
+pub use registry::{ModelRegistry, ProviderRegistry};
 pub use stream::{
     ByteStream, DecodingStream, SseFrameReader, StopReason, StreamChunk, StreamChunkIterator,
     StreamDecoder, Usage,
