@@ -241,8 +241,12 @@ struct PromptTokensDetails {
 struct ApiUsage {
     prompt_tokens: u64,
     completion_tokens: u64,
+    #[serde(default)]
     prompt_tokens_details: Option<PromptTokensDetails>,
+    // 以下为 DeepSeek 专有字段, 其它 OpenAI 兼容服务不会返回, 故 default=0。
+    #[serde(default)]
     prompt_cache_hit_tokens: u64,
+    #[serde(default)]
     prompt_cache_miss_tokens: u64,
 }
 
@@ -542,5 +546,24 @@ mod decoder_tests {
             chunks.last().unwrap(),
             StreamChunk::Finished { stop_reason: StopReason::ToolUse, .. }
         ));
+    }
+
+    #[test]
+    fn decodes_finish_with_openai_style_usage_without_cache_fields() {
+        // 非 DeepSeek 的 OpenAI 兼容服务通常只返回 prompt_tokens/completion_tokens/total_tokens,
+        // 不含 prompt_cache_hit_tokens 等 DeepSeek 专有字段。decoder 必须能解析, 不能 Parse 错误。
+        let chunks = decode_all(&[b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n"]);
+
+        match chunks.last().unwrap() {
+            StreamChunk::Finished { stop_reason, usage } => {
+                assert_eq!(*stop_reason, StopReason::EndTurn);
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(usage.output_tokens, 5);
+                // DeepSeek 专有字段缺失时按 0 记入 extra(关键是不能 Parse 失败中断流)。
+                assert_eq!(usage.extra["prompt_cache_hit_tokens"], 0);
+                assert_eq!(usage.extra["prompt_cache_miss_tokens"], 0);
+            }
+            other => panic!("expected Finished, got {other:?}"),
+        }
     }
 }
