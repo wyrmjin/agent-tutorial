@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use logger::trace;
+
 use crate::error::AiError;
 use crate::message::{Message, ToolSpec};
 use crate::protocol::{Protocol, ProtocolKind, SamplingParams, ThinkingLevel};
@@ -272,6 +274,7 @@ impl OpenAiCompletionsDecoder {
 
     /// Decode a single SSE line into zero or more chunks.
     fn process_line(&mut self, line: &str) -> Result<Vec<StreamChunk>, AiError> {
+        trace!(%line, "sse_line");
         if self.done {
             return Ok(Vec::new());
         }
