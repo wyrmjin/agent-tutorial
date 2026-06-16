@@ -3,7 +3,10 @@ use std::sync::Arc;
 use agent::{Agent, AgentConfig};
 use futures::StreamExt;
 use logger::{Logger, debug, error, info};
-use ai::{DeepSeekProvider, ProviderConfig, ProviderRegistry};
+use ai::{
+    AuthStyle, Capabilities, GenericProvider, LanguageModel, Model, ModelRegistry,
+    OpenAiCompletionsProtocol, ProtocolKind, SamplingParams, Transport,
+};
 use tool::{BashTool, ReadFileTool, ToolRegistry, WriteFileTool};
 
 #[tokio::main]
@@ -14,18 +17,30 @@ async fn main() -> anyhow::Result<()> {
     let api_key =
         std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY must be set in .env file");
 
-    // 使用 ProviderRegistry 注册 ai
-    let mut provider_registry = ProviderRegistry::new();
-    provider_registry.register(
+    // 组装:Provider(谁) + Protocol(怎么) + Transport(传输) → Model → ModelRegistry
+    let transport = Arc::new(Transport::new());
+    let provider = Arc::new(GenericProvider::new(
         "deepseek",
-        Arc::new(DeepSeekProvider::new(
-            ProviderConfig::new(api_key).with_model("deepseek-v4-flash"),
-        )),
-    );
+        "https://api.deepseek.com",
+        api_key,
+        AuthStyle::Bearer,
+        vec![ProtocolKind::OpenAiCompletions],
+    ));
+    let model: Arc<dyn LanguageModel> = Arc::new(Model::new(
+        "deepseek-v4-flash",
+        provider,
+        Arc::new(OpenAiCompletionsProtocol::new()),
+        transport,
+        SamplingParams::default(),
+        Capabilities::default(),
+    ));
 
-    let provider = provider_registry
-        .default_provider()
-        .expect("no ai registered");
+    let mut model_registry = ModelRegistry::new();
+    model_registry.register("deepseek-v4-flash", model);
+
+    let model = model_registry
+        .default_model()
+        .expect("no model registered");
 
     // 注册工具
     let mut tools = ToolRegistry::new();
@@ -61,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
          - 当前用户: {user}"
     );
     debug!(%system_prompt, "system prompt configured");
-    let agent = Agent::new(provider, system_prompt);
+    let agent = Agent::new(model, system_prompt);
 
     let config = AgentConfig::default();
 

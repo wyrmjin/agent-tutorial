@@ -7,35 +7,35 @@ use crate::config::AgentConfig;
 use crate::event::AgentEvent;
 
 // ---------------------------------------------------------------------------
-// Mock Provider
+// Mock Model
 // ---------------------------------------------------------------------------
 
-/// A mock ai that returns a fixed set of stream chunks.
-struct MockProvider {
+/// A mock model that returns a fixed set of stream chunks.
+struct MockModel {
     response: Vec<ai::StreamChunk>,
 }
 
-impl MockProvider {
+impl MockModel {
     fn new(chunks: Vec<ai::StreamChunk>) -> Self {
         Self { response: chunks }
     }
 }
 
 #[async_trait::async_trait]
-impl ai::Provider for MockProvider {
+impl ai::LanguageModel for MockModel {
     async fn stream_chat(
         &self,
         _messages: &[ai::Message],
         _tools: &[ai::ToolSpec],
-    ) -> Result<Box<dyn ai::StreamChunkIterator>, ai::ProviderError> {
+    ) -> Result<Box<dyn ai::StreamChunkIterator>, ai::AiError> {
         Ok(Box::new(MockStream {
             chunks: self.response.clone(),
             index: 0,
         }))
     }
 
-    fn provider_type(&self) -> ai::ProviderType {
-        ai::ProviderType::DeepSeek
+    fn model_id(&self) -> &str {
+        "mock"
     }
 }
 
@@ -46,7 +46,7 @@ struct MockStream {
 
 #[async_trait::async_trait]
 impl ai::StreamChunkIterator for MockStream {
-    async fn next(&mut self) -> Result<Option<ai::StreamChunk>, ai::ProviderError> {
+    async fn next(&mut self) -> Result<Option<ai::StreamChunk>, ai::AiError> {
         if self.index < self.chunks.len() {
             let chunk = self.chunks[self.index].clone();
             self.index += 1;
@@ -57,12 +57,12 @@ impl ai::StreamChunkIterator for MockStream {
     }
 }
 
-fn make_mock_provider(chunks: Vec<ai::StreamChunk>) -> Arc<dyn ai::Provider> {
-    Arc::new(MockProvider::new(chunks))
+fn make_mock_model(chunks: Vec<ai::StreamChunk>) -> Arc<dyn ai::LanguageModel> {
+    Arc::new(MockModel::new(chunks))
 }
 
-fn make_default_provider() -> Arc<dyn ai::Provider> {
-    make_mock_provider(vec![
+fn make_default_model() -> Arc<dyn ai::LanguageModel> {
+    make_mock_model(vec![
         ai::StreamChunk::Text("Hello, ".to_string()),
         ai::StreamChunk::Text("world!".to_string()),
         ai::StreamChunk::Finished {
@@ -77,17 +77,17 @@ fn make_tools() -> Arc<tool::ToolRegistry> {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-round mock ai
+// Multi-round mock model
 // ---------------------------------------------------------------------------
 
-/// A mock ai that returns different responses for each call.
+/// A mock model that returns different responses for each call.
 /// This allows testing multi-round tool-call loops.
-struct MultiRoundMockProvider {
+struct MultiRoundMockModel {
     responses: Vec<Vec<ai::StreamChunk>>,
     call_count: std::sync::Mutex<usize>,
 }
 
-impl MultiRoundMockProvider {
+impl MultiRoundMockModel {
     fn new(responses: Vec<Vec<ai::StreamChunk>>) -> Self {
         Self {
             responses,
@@ -97,12 +97,12 @@ impl MultiRoundMockProvider {
 }
 
 #[async_trait::async_trait]
-impl ai::Provider for MultiRoundMockProvider {
+impl ai::LanguageModel for MultiRoundMockModel {
     async fn stream_chat(
         &self,
         _messages: &[ai::Message],
         _tools: &[ai::ToolSpec],
-    ) -> Result<Box<dyn ai::StreamChunkIterator>, ai::ProviderError> {
+    ) -> Result<Box<dyn ai::StreamChunkIterator>, ai::AiError> {
         let idx = {
             let mut count = self.call_count.lock().unwrap();
             let i = *count;
@@ -123,8 +123,8 @@ impl ai::Provider for MultiRoundMockProvider {
         }))
     }
 
-    fn provider_type(&self) -> ai::ProviderType {
-        ai::ProviderType::DeepSeek
+    fn model_id(&self) -> &str {
+        "mock"
     }
 }
 
@@ -188,8 +188,8 @@ async fn collect_events(handle: &mut crate::handle::AgentHandle) -> Vec<AgentEve
 
 #[tokio::test]
 async fn test_run_stream_returns_text_events() {
-    let provider = make_default_provider();
-    let agent = Agent::new(provider, "test system prompt".to_string());
+    let model = make_default_model();
+    let agent = Agent::new(model, "test system prompt".to_string());
     let tools = make_tools();
     let config = AgentConfig::default();
 
@@ -210,8 +210,8 @@ async fn test_run_stream_returns_text_events() {
 
 #[tokio::test]
 async fn test_run_stream_done_contains_messages() {
-    let provider = make_default_provider();
-    let agent = Agent::new(provider, "test".to_string());
+    let model = make_default_model();
+    let agent = Agent::new(model, "test".to_string());
     let tools = make_tools();
     let config = AgentConfig::default();
 
@@ -235,14 +235,14 @@ async fn test_run_stream_done_contains_messages() {
 
 #[tokio::test]
 async fn test_run_stream_abort() {
-    let provider = make_mock_provider(vec![
+    let model = make_mock_model(vec![
         ai::StreamChunk::Text("starting...".to_string()),
         ai::StreamChunk::Finished {
             stop_reason: ai::StopReason::EndTurn,
             usage: ai::Usage::default(),
         },
     ]);
-    let agent = Agent::new(provider, "test".to_string());
+    let agent = Agent::new(model, "test".to_string());
     let tools = make_tools();
     let config = AgentConfig::default();
 
@@ -272,8 +272,8 @@ async fn test_run_stream_abort() {
 async fn test_history_auto_writeback_after_stream() {
     // Verify that history is automatically written back after run_stream completes,
     // without requiring a manual set_history call.
-    let provider = make_default_provider();
-    let agent = Agent::new(provider, "test system prompt".to_string());
+    let model = make_default_model();
+    let agent = Agent::new(model, "test system prompt".to_string());
     let tools = make_tools();
     let config = AgentConfig::default();
 
@@ -306,8 +306,8 @@ async fn test_history_auto_writeback_after_stream() {
 #[tokio::test]
 async fn test_history_accumulates_across_turns() {
     // Verify that history accumulates correctly across multiple run_stream calls.
-    let provider = make_default_provider();
-    let agent = Agent::new(provider, "test".to_string());
+    let model = make_default_model();
+    let agent = Agent::new(model, "test".to_string());
     let tools = make_tools();
     let config = AgentConfig::default();
 
@@ -345,7 +345,7 @@ async fn test_history_accumulates_across_turns() {
 #[tokio::test]
 async fn test_tool_use_executes_tool_and_loops() {
     // Round 1: LLM requests tool use → tool executes → round 2: LLM ends turn.
-    let provider = Arc::new(MultiRoundMockProvider::new(vec![
+    let model = Arc::new(MultiRoundMockModel::new(vec![
         // First call: request tool use
         vec![
             ai::StreamChunk::Text("Let me check...".to_string()),
@@ -369,7 +369,7 @@ async fn test_tool_use_executes_tool_and_loops() {
         ],
     ]));
 
-    let agent = Agent::new(provider, "test".to_string());
+    let agent = Agent::new(model, "test".to_string());
     let tools = make_tools_with_echo();
     let config = AgentConfig::default();
 
@@ -421,7 +421,7 @@ async fn test_tool_use_executes_tool_and_loops() {
 #[tokio::test]
 async fn test_multiple_tool_calls_in_single_round() {
     // LLM requests two tool calls in one response.
-    let provider = Arc::new(MultiRoundMockProvider::new(vec![
+    let model = Arc::new(MultiRoundMockModel::new(vec![
         vec![
             ai::StreamChunk::ToolUse {
                 id: "call_1".to_string(),
@@ -447,7 +447,7 @@ async fn test_multiple_tool_calls_in_single_round() {
         ],
     ]));
 
-    let agent = Agent::new(provider, "test".to_string());
+    let agent = Agent::new(model, "test".to_string());
     let tools = make_tools_with_echo();
     let config = AgentConfig::default();
 
@@ -476,7 +476,7 @@ async fn test_multiple_tool_calls_in_single_round() {
 #[tokio::test]
 async fn test_multi_round_tool_loop() {
     // LLM calls tool 3 times before ending — tests the loop mechanism.
-    let provider = Arc::new(MultiRoundMockProvider::new(vec![
+    let model = Arc::new(MultiRoundMockModel::new(vec![
         // Round 1: tool call
         vec![
             ai::StreamChunk::ToolUse {
@@ -511,7 +511,7 @@ async fn test_multi_round_tool_loop() {
         ],
     ]));
 
-    let agent = Agent::new(provider, "test".to_string());
+    let agent = Agent::new(model, "test".to_string());
     let tools = make_tools_with_echo();
     let config = AgentConfig::default();
 
@@ -544,7 +544,7 @@ async fn test_multi_round_tool_loop() {
 #[tokio::test]
 async fn test_unknown_tool_returns_error() {
     // LLM requests a tool that doesn't exist.
-    let provider = Arc::new(MultiRoundMockProvider::new(vec![
+    let model = Arc::new(MultiRoundMockModel::new(vec![
         vec![
             ai::StreamChunk::ToolUse {
                 id: "call_1".to_string(),
@@ -565,7 +565,7 @@ async fn test_unknown_tool_returns_error() {
         ],
     ]));
 
-    let agent = Agent::new(provider, "test".to_string());
+    let agent = Agent::new(model, "test".to_string());
     let tools = make_tools(); // empty registry — no tools registered
     let config = AgentConfig::default();
 
@@ -588,32 +588,32 @@ async fn test_unknown_tool_returns_error() {
 
 #[tokio::test]
 async fn test_stream_error_reports_error_event() {
-    // Provider returns a stream that yields an error.
+    // Model returns a stream that yields an error.
     struct ErrorStream;
     #[async_trait::async_trait]
     impl ai::StreamChunkIterator for ErrorStream {
         async fn next(
             &mut self,
-        ) -> Result<Option<ai::StreamChunk>, ai::ProviderError> {
-            Err(ai::ProviderError::Api { status: 500, message: "connection lost".to_string() })
+        ) -> Result<Option<ai::StreamChunk>, ai::AiError> {
+            Err(ai::AiError::Api { status: 500, message: "connection lost".to_string() })
         }
     }
-    struct ErrorProvider;
+    struct ErrorModel;
     #[async_trait::async_trait]
-    impl ai::Provider for ErrorProvider {
+    impl ai::LanguageModel for ErrorModel {
         async fn stream_chat(
             &self,
             _messages: &[ai::Message],
             _tools: &[ai::ToolSpec],
-        ) -> Result<Box<dyn ai::StreamChunkIterator>, ai::ProviderError> {
+        ) -> Result<Box<dyn ai::StreamChunkIterator>, ai::AiError> {
             Ok(Box::new(ErrorStream))
         }
-        fn provider_type(&self) -> ai::ProviderType {
-            ai::ProviderType::DeepSeek
+        fn model_id(&self) -> &str {
+            "error-mock"
         }
     }
 
-    let agent = Agent::new(Arc::new(ErrorProvider), "test".to_string());
+    let agent = Agent::new(Arc::new(ErrorModel), "test".to_string());
     let tools = make_tools();
     let config = AgentConfig::default();
 

@@ -4,7 +4,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use futures::FutureExt;
-use ai::{Message, Provider};
+use ai::{LanguageModel, Message};
 use tool::ToolRegistry;
 
 use crate::config::AgentConfig;
@@ -17,7 +17,7 @@ use crate::handle::AgentHandle;
 /// so the background agent loop can automatically write it back when finished,
 /// eliminating the need for manual `set_history` calls.
 pub struct Agent {
-    provider: Arc<dyn Provider>,
+    model: Arc<dyn LanguageModel>,
     history: Arc<std::sync::Mutex<Vec<Message>>>,
     /// Guard flag to prevent concurrent `run_stream` calls.
     running: Arc<std::sync::Mutex<bool>>,
@@ -25,13 +25,13 @@ pub struct Agent {
 
 impl Agent {
     /// Create a new agent with the given ai and system prompt.
-    pub fn new(provider: Arc<dyn Provider>, system_prompt: String) -> Self {
+    pub fn new(model: Arc<dyn LanguageModel>, system_prompt: String) -> Self {
         let mut history = Vec::new();
         if !system_prompt.is_empty() {
             history.push(Message::system(system_prompt));
         }
         Self {
-            provider,
+            model,
             history: Arc::new(std::sync::Mutex::new(history)),
             running: Arc::new(std::sync::Mutex::new(false)),
         }
@@ -88,7 +88,7 @@ impl Agent {
         let mut history = std::mem::take(&mut *self.history.lock().unwrap());
         history.push(ai::Message::user(user_input));
 
-        let provider = Arc::clone(&self.provider);
+        let model = Arc::clone(&self.model);
         let tool_specs = tools.to_tool_specs();
         let max_rounds = config.max_tool_rounds;
         let history_slot = Arc::clone(&self.history);
@@ -103,7 +103,7 @@ impl Agent {
 
         tokio::spawn(async move {
             let result = AssertUnwindSafe(crate::agent_loop::run_loop_bg(
-                provider,
+                model,
                 history,
                 tool_specs,
                 tools,

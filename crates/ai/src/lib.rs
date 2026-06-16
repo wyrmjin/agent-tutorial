@@ -17,6 +17,7 @@ pub use error::AiError as ProviderError;
 pub use message::{Message, Role, ToolCallRequest, ToolSpec};
 pub use model::{Capabilities, LanguageModel, Model};
 pub use provider::{AuthStyle, Endpoint, GenericProvider};
+pub use protocol::openai_completions::OpenAiCompletionsProtocol;
 pub use protocol::{Protocol, ProtocolKind, SamplingParams, ThinkingLevel};
 pub use registry::{ModelRegistry, ProviderRegistry};
 pub use stream::{

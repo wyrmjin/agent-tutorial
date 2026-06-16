@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use logger::info;
-use ai::{Message, Provider, StopReason, StreamChunk};
+use ai::{LanguageModel, Message, StopReason, StreamChunk};
 use tool::ToolRegistry;
 
 use crate::approval::{ApprovalAction, wait_for_approval};
@@ -71,7 +71,7 @@ impl StreamOutcome {
 /// This function is spawned into a tokio task and drives the round-based
 /// conversation: call LLM → process response → execute tools → repeat.
 pub(crate) async fn run_loop_bg(
-    provider: Arc<dyn Provider>,
+    model: Arc<dyn LanguageModel>,
     history: Vec<Message>,
     tool_specs: Vec<ai::ToolSpec>,
     tools: Arc<ToolRegistry>,
@@ -103,7 +103,7 @@ pub(crate) async fn run_loop_bg(
         info!("starting round {}", round + 1);
 
         // 3. Call LLM (streaming)
-        let mut stream = match provider.stream_chat(&history, &tool_specs).await {
+        let mut stream = match model.stream_chat(&history, &tool_specs).await {
             Ok(s) => s,
             Err(e) => {
                 sender.push(AgentEvent::Error {
