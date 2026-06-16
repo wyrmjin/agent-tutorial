@@ -3,6 +3,7 @@
 pub mod deepseek;
 pub mod error;
 pub mod message;
+pub mod model;
 pub mod protocol;
 pub mod provider;
 pub mod registry;
@@ -14,6 +15,7 @@ pub use error::AiError;
 /// 临时别名 —— 让尚未迁移的旧代码继续编译, 后续 Task 切换调用方后删除。
 pub use error::AiError as ProviderError;
 pub use message::{Message, Role, ToolCallRequest, ToolSpec};
+pub use model::{Capabilities, LanguageModel, Model};
 pub use provider::{AuthStyle, Endpoint, GenericProvider};
 pub use protocol::{Protocol, ProtocolKind, SamplingParams, ThinkingLevel};
 pub use registry::ProviderRegistry;
