@@ -1,5 +1,12 @@
 //! Streaming response model and the chunk iterator the agent consumes.
 
+use std::collections::VecDeque;
+use std::pin::Pin;
+
+use bytes::Bytes;
+use futures::stream::Stream;
+use futures::StreamExt;
+
 use crate::error::AiError;
 
 /// A streaming chunk from the LLM.
@@ -71,6 +78,61 @@ impl SseFrameReader {
     }
 }
 
+/// A protocol-specific streaming decoder. Owns accumulation state
+/// (e.g. partially-streamed tool calls). Does its own framing.
+pub trait StreamDecoder: Send {
+    /// Feed raw bytes; return any chunks now decodable.
+    fn feed(&mut self, bytes: &[u8]) -> Result<Vec<StreamChunk>, AiError>;
+    /// Called once the byte stream ends; flush any pending state.
+    fn finish(&mut self) -> Result<Vec<StreamChunk>, AiError>;
+}
+
+/// Boxed byte stream as produced by `reqwest::Response::bytes_stream`.
+pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
+
+/// Generic adapter: drives a byte stream through a `StreamDecoder`,
+/// exposing the pull-based `StreamChunkIterator` the agent consumes.
+/// Reused across all protocols.
+pub struct DecodingStream {
+    byte_stream: ByteStream,
+    decoder: Box<dyn StreamDecoder>,
+    pending: VecDeque<StreamChunk>,
+    finished: bool,
+}
+
+impl DecodingStream {
+    pub fn new(byte_stream: ByteStream, decoder: Box<dyn StreamDecoder>) -> Self {
+        Self {
+            byte_stream,
+            decoder,
+            pending: VecDeque::new(),
+            finished: false,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl StreamChunkIterator for DecodingStream {
+    async fn next(&mut self) -> Result<Option<StreamChunk>, AiError> {
+        loop {
+            if let Some(c) = self.pending.pop_front() {
+                return Ok(Some(c));
+            }
+            if self.finished {
+                return Ok(None);
+            }
+            match self.byte_stream.next().await {
+                Some(Ok(bytes)) => self.pending.extend(self.decoder.feed(&bytes)?),
+                Some(Err(e)) => return Err(e.into()),
+                None => {
+                    self.pending.extend(self.decoder.finish()?);
+                    self.finished = true;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod sse_tests {
     use super::SseFrameReader;
@@ -96,5 +158,51 @@ mod sse_tests {
         assert!(r.push(b"data: tail").is_empty());
         assert_eq!(r.flush(), Some("data: tail".to_string()));
         assert_eq!(r.flush(), None);
+    }
+}
+
+#[cfg(test)]
+mod decoding_stream_tests {
+    use super::*;
+    use bytes::Bytes;
+    use futures::stream;
+
+    /// Decoder that turns each fed byte-chunk into one Text chunk,
+    /// and emits a Finished on finish().
+    struct EchoDecoder;
+    impl StreamDecoder for EchoDecoder {
+        fn feed(&mut self, bytes: &[u8]) -> Result<Vec<StreamChunk>, AiError> {
+            Ok(vec![StreamChunk::Text(String::from_utf8_lossy(bytes).into_owned())])
+        }
+        fn finish(&mut self) -> Result<Vec<StreamChunk>, AiError> {
+            Ok(vec![StreamChunk::Finished {
+                stop_reason: StopReason::EndTurn,
+                usage: Usage::default(),
+            }])
+        }
+    }
+
+    #[test]
+    fn yields_decoded_chunks_then_finish() {
+        // 用 futures 自带的 block_on 跑异步, 避免给 ai crate 引入 tokio dev-dep。
+        futures::executor::block_on(async {
+            let byte_stream = stream::iter(vec![
+                Ok(Bytes::from_static(b"foo")),
+                Ok(Bytes::from_static(b"bar")),
+            ]);
+            let mut ds = DecodingStream::new(Box::pin(byte_stream), Box::new(EchoDecoder));
+
+            let mut texts = Vec::new();
+            let mut finished = false;
+            while let Some(chunk) = ds.next().await.unwrap() {
+                match chunk {
+                    StreamChunk::Text(t) => texts.push(t),
+                    StreamChunk::Finished { .. } => finished = true,
+                    _ => {}
+                }
+            }
+            assert_eq!(texts, vec!["foo".to_string(), "bar".to_string()]);
+            assert!(finished);
+        });
     }
 }
