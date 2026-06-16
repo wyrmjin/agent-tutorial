@@ -365,6 +365,8 @@ impl OpenAiCompletionsDecoder {
 
                 out.push(StreamChunk::Finished { stop_reason, usage });
                 self.done = true;
+                // 终态已产出, 同一帧里后续 choice 不应再产生 chunk(否则 Text 会排在 Finished 之后)。
+                break;
             }
         }
         Ok(out)
@@ -565,5 +567,25 @@ mod decoder_tests {
             }
             other => panic!("expected Finished, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn no_chunks_after_finished_in_multi_choice_frame() {
+        // 同一帧里 finish_reason 出现在前一个 choice, 后续 choice 的 Text 不应在 Finished 之后产出。
+        // 期望: Text("x") → Finished, 不会有 Text("y")。
+        let chunks = decode_all(&[
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"},\"finish_reason\":\"stop\"},{\"delta\":{\"content\":\"y\"}}],\"usage\":null}\n",
+        ]);
+        // 找到 Finished 的位置, 其后不应有任何 chunk。
+        let finished_idx = chunks
+            .iter()
+            .position(|c| matches!(c, StreamChunk::Finished { .. }))
+            .expect("应有 Finished");
+        assert_eq!(
+            finished_idx,
+            chunks.len() - 1,
+            "Finished 必须是最后一个 chunk, 但实际序列: {:?}",
+            chunks
+        );
     }
 }
