@@ -7,6 +7,7 @@ pub mod protocol;
 pub mod provider;
 pub mod registry;
 pub mod stream;
+pub mod transport;
 
 pub use deepseek::DeepSeekProvider;
 pub use error::AiError;
@@ -20,6 +21,7 @@ pub use stream::{
     ByteStream, DecodingStream, SseFrameReader, StopReason, StreamChunk, StreamChunkIterator,
     StreamDecoder, Usage,
 };
+pub use transport::Transport;
 
 use std::fmt;
 
