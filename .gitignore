@@ -5,3 +5,4 @@
 docs
 logs
 .env
+Cargo.lock
