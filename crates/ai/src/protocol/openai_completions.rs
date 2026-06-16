@@ -265,10 +265,10 @@ impl OpenAiCompletionsDecoder {
         for choice in &chunk.choices {
             let delta = &choice.delta;
 
-            if let Some(content) = &delta.content {
-                if !content.is_empty() {
-                    out.push(StreamChunk::Text(content.clone()));
-                }
+            if let Some(content) = &delta.content
+                && !content.is_empty()
+            {
+                out.push(StreamChunk::Text(content.clone()));
             }
 
             if let Some(tool_calls) = &delta.tool_calls {
