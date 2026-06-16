@@ -321,9 +321,14 @@ impl OpenAiCompletionsDecoder {
                     let (id, name, args) = self.pending_tool_calls.remove(&idx).unwrap();
                     if let (Some(id), Some(name)) = (id, name) {
                         let input: serde_json::Value = if args.is_empty() {
+                            // 无参工具: arguments 流式累积为空, 发空对象。
                             serde_json::Value::Object(serde_json::Map::new())
                         } else {
-                            serde_json::from_str(&args).unwrap_or_default()
+                            // 非空 arguments 必须是合法 JSON; 畸形(如被 max_tokens 截断)
+                            // 应明确报错, 而非静默吞成 Null 让工具收到误导性入参。
+                            serde_json::from_str(&args).map_err(|e| {
+                                AiError::Parse(format!("tool {name} arguments: {e}"))
+                            })?
                         };
                         out.push(StreamChunk::ToolUse { id, name, input });
                     }
@@ -576,7 +581,6 @@ mod decoder_tests {
         let chunks = decode_all(&[
             b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"},\"finish_reason\":\"stop\"},{\"delta\":{\"content\":\"y\"}}],\"usage\":null}\n",
         ]);
-        // 找到 Finished 的位置, 其后不应有任何 chunk。
         let finished_idx = chunks
             .iter()
             .position(|c| matches!(c, StreamChunk::Finished { .. }))
@@ -586,6 +590,36 @@ mod decoder_tests {
             chunks.len() - 1,
             "Finished 必须是最后一个 chunk, 但实际序列: {:?}",
             chunks
+        );
+    }
+
+    #[test]
+    fn empty_tool_arguments_become_empty_object() {
+        // 工具调用 arguments 为空(无参工具常见)→ input 应是空对象 {}, 而非 Value::Null。
+        let chunks = decode_all(&[
+            b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"ping\",\"arguments\":\"\"}}]},\"finish_reason\":null}],\"usage\":null}\n",
+            b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n",
+        ]);
+        let tu = chunks
+            .iter()
+            .find_map(|c| match c {
+                StreamChunk::ToolUse { input, .. } => Some(input.clone()),
+                _ => None,
+            })
+            .expect("应有 ToolUse");
+        assert!(tu.is_object(), "空参应是 JSON 对象, 实际: {tu}");
+        assert!(tu.as_object().unwrap().is_empty(), "应是空对象 {{}}");
+    }
+
+    #[test]
+    fn malformed_tool_arguments_surface_parse_error() {
+        // arguments 非空但畸形(如被 max_tokens 截断)→ 不应静默吞成 Null, 应返回 Parse 错误。
+        let p = OpenAiCompletionsProtocol::new();
+        let mut d = p.new_decoder();
+        let res = d.feed(b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"echo\",\"arguments\":\"{not json\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":null}\n");
+        assert!(
+            matches!(res, Err(crate::error::AiError::Parse(_))),
+            "畸形 arguments 应返回 Parse 错误, 实际: {res:?}"
         );
     }
 }
