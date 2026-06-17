@@ -5,6 +5,5 @@ edition.workspace = true
 
 [dependencies]
 anyhow = "1"
-tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "time", "local-time"] }
 tracing-appender = "0.2"

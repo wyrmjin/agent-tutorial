@@ -5,6 +5,7 @@ use crate::message::{Message, ToolSpec};
 use crate::protocol::{Protocol, SamplingParams};
 use crate::provider::Endpoint;
 use crate::stream::{DecodingStream, StreamChunkIterator};
+use tracing::{debug, error};
 
 pub struct Transport {
     client: reqwest::Client,
@@ -12,7 +13,9 @@ pub struct Transport {
 
 impl Transport {
     pub fn new() -> Self {
-        Self { client: reqwest::Client::new() }
+        Self {
+            client: reqwest::Client::new(),
+        }
     }
 
     /// Encode via `protocol`, POST to the provider `endpoint`, and return a
@@ -36,18 +39,17 @@ impl Transport {
         for (k, v) in &endpoint.headers {
             req = req.header(k.as_str(), v.as_str());
         }
-
-        logger::debug!(%url, "ai api request");
+        debug!(%url, body = %body, "ai api request");
 
         let response = req.send().await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let message = response.text().await.unwrap_or_default();
-            logger::error!(%status, %message, "ai api error");
+            error!(%status, %message, "ai api error");
             return Err(AiError::Api { status, message });
         }
-        logger::debug!(status = %response.status(), "ai api response ok");
+        debug!(status = %response.status(), "ai api response ok");
 
         Ok(Box::new(DecodingStream::new(
             Box::pin(response.bytes_stream()),

@@ -10,6 +10,7 @@ pub use write_file::WriteFileTool;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 /// Result of executing a tool.
 #[derive(Debug, Clone)]
@@ -119,7 +120,7 @@ impl ToolRegistry {
         if let Some(tool) = self.get(tool_name) {
             tool.approve(input);
         } else {
-            logger::warn!(%tool_name, "approve called for unknown tool");
+            warn!(%tool_name, "approve called for unknown tool");
         }
     }
 

@@ -1,10 +1,9 @@
 //! Write file tool — write content to files with path safety check.
 
+use crate::{Tool, ToolOutput, is_within_cwd};
 use std::path::PathBuf;
 use std::time::Duration;
-
-use crate::{Tool, ToolOutput, is_within_cwd};
-use logger::{debug, error, warn};
+use tracing::{debug, error, warn};
 
 pub struct WriteFileTool {
     timeout: Duration,

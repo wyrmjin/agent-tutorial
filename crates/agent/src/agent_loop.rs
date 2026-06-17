@@ -1,10 +1,9 @@
 //! Background agent loop — runs inside a tokio::spawn task.
 
-use std::sync::Arc;
-
-use logger::info;
 use ai::{LanguageModel, Message, StopReason, StreamChunk};
+use std::sync::Arc;
 use tool::ToolRegistry;
+use tracing::info;
 
 use crate::approval::{ApprovalAction, wait_for_approval};
 use crate::event::{AgentEvent, AgentResult};
@@ -18,10 +17,7 @@ use crate::handle::SteeringMessage;
 /// Outcome of consuming all chunks from one LLM streaming call.
 enum StreamOutcome {
     /// The LLM ended its turn with text only (no tool calls).
-    EndTurn {
-        content: String,
-        usage: ai::Usage,
-    },
+    EndTurn { content: String, usage: ai::Usage },
     /// The LLM requested one or more tool calls.
     ToolUse {
         content: String,
@@ -29,10 +25,7 @@ enum StreamOutcome {
         usage: ai::Usage,
     },
     /// The LLM hit the max token limit before finishing.
-    MaxTokens {
-        content: String,
-        usage: ai::Usage,
-    },
+    MaxTokens { content: String, usage: ai::Usage },
     /// The stream ended with an error or without a proper stop reason.
     StreamError {
         content: String,
@@ -368,7 +361,7 @@ async fn execute_tool_with_approval(
         input: tool_call.input.clone(),
     });
 
-    logger::info!(tool = %tool_call.name, tool_id = %tool_call.id, "executing tool");
+    info!(tool = %tool_call.name, tool_id = %tool_call.id, "executing tool");
 
     let output = execute_tool(tools, &tool_call.name, tool_call.input.clone()).await;
 
@@ -454,7 +447,7 @@ fn emit_turn_end(
     round: usize,
     usage: &ai::Usage,
 ) {
-    logger::info!(
+    info!(
         round = round + 1,
         input_tokens = usage.input_tokens,
         output_tokens = usage.output_tokens,

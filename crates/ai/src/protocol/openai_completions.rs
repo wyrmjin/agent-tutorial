@@ -4,14 +4,12 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-
-use logger::trace;
-
 use crate::error::AiError;
 use crate::message::{Message, ToolSpec};
 use crate::protocol::{Protocol, ProtocolKind, SamplingParams, ThinkingLevel};
 use crate::stream::{SseFrameReader, StopReason, StreamChunk, StreamDecoder, Usage};
+use serde::{Deserialize, Serialize};
+use tracing::trace;
 
 pub struct OpenAiCompletionsProtocol;
 
@@ -105,17 +103,28 @@ fn build_api_messages(messages: &[Message]) -> Vec<ApiMessage> {
         .map(|msg| match msg {
             Message::System { content } => ApiMessage {
                 role: "system".to_string(),
-                content: if content.is_empty() { None } else { Some(content.clone()) },
+                content: if content.is_empty() {
+                    None
+                } else {
+                    Some(content.clone())
+                },
                 tool_calls: None,
                 tool_call_id: None,
             },
             Message::User { content } => ApiMessage {
                 role: "user".to_string(),
-                content: if content.is_empty() { None } else { Some(content.clone()) },
+                content: if content.is_empty() {
+                    None
+                } else {
+                    Some(content.clone())
+                },
                 tool_calls: None,
                 tool_call_id: None,
             },
-            Message::Assistant { content, tool_calls } => {
+            Message::Assistant {
+                content,
+                tool_calls,
+            } => {
                 let tc_deltas = tool_calls.as_ref().map(|tcs| {
                     tcs.iter()
                         .enumerate()
@@ -132,14 +141,25 @@ fn build_api_messages(messages: &[Message]) -> Vec<ApiMessage> {
                 });
                 ApiMessage {
                     role: "assistant".to_string(),
-                    content: if content.is_empty() { None } else { Some(content.clone()) },
+                    content: if content.is_empty() {
+                        None
+                    } else {
+                        Some(content.clone())
+                    },
                     tool_calls: tc_deltas,
                     tool_call_id: None,
                 }
             }
-            Message::Tool { content, tool_call_id } => ApiMessage {
+            Message::Tool {
+                content,
+                tool_call_id,
+            } => ApiMessage {
                 role: "tool".to_string(),
-                content: if content.is_empty() { None } else { Some(content.clone()) },
+                content: if content.is_empty() {
+                    None
+                } else {
+                    Some(content.clone())
+                },
                 tool_calls: None,
                 tool_call_id: Some(tool_call_id.clone()),
             },
@@ -286,7 +306,8 @@ impl OpenAiCompletionsDecoder {
             return Ok(Vec::new());
         };
 
-        let chunk: ChatChunk = serde_json::from_str(data).map_err(|e| AiError::Parse(e.to_string()))?;
+        let chunk: ChatChunk =
+            serde_json::from_str(data).map_err(|e| AiError::Parse(e.to_string()))?;
 
         let mut out = Vec::new();
         for choice in &chunk.choices {
@@ -410,7 +431,12 @@ mod build_body_tests {
         let p = OpenAiCompletionsProtocol::new();
         let messages = vec![Message::system("sys"), Message::user("hi")];
         let body = p
-            .build_body("deepseek-v4-flash", &SamplingParams::default(), &messages, &[])
+            .build_body(
+                "deepseek-v4-flash",
+                &SamplingParams::default(),
+                &messages,
+                &[],
+            )
             .unwrap();
 
         assert_eq!(body["model"], "deepseek-v4-flash");
@@ -554,7 +580,10 @@ mod decoder_tests {
 
         assert!(matches!(
             chunks.last().unwrap(),
-            StreamChunk::Finished { stop_reason: StopReason::ToolUse, .. }
+            StreamChunk::Finished {
+                stop_reason: StopReason::ToolUse,
+                ..
+            }
         ));
     }
 

@@ -8,4 +8,4 @@ ai = { path = "../ai" }
 async-trait = "0.1"
 serde_json = "1"
 tokio = { version = "1", features = ["process"] }
-logger = { path = "../logger" }
+tracing = "0.1"

@@ -1,8 +1,7 @@
 //! Approval handling for tool calls that require user confirmation.
 
-use logger::warn;
-
 use crate::handle::SteeringMessage;
+use tracing::warn;
 
 /// Result of waiting for an approval decision from the consumer.
 pub(crate) enum ApprovalAction {

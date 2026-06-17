@@ -1,9 +1,8 @@
 //! Bash tool — execute shell commands with dangerous-command blocking.
 
-use std::time::Duration;
-
 use crate::{Tool, ToolOutput};
-use logger::{error, info, warn};
+use std::time::Duration;
+use tracing::{error, info, warn};
 
 pub struct BashTool {
     timeout: Duration,

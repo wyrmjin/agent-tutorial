@@ -3,9 +3,10 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
-use futures::FutureExt;
 use ai::{LanguageModel, Message};
+use futures::FutureExt;
 use tool::ToolRegistry;
+use tracing::error;
 
 use crate::config::AgentConfig;
 use crate::event_stream::EventStream;
@@ -80,7 +81,10 @@ impl Agent {
         // and must not be taken again until finalize() writes it back.
         {
             let mut running = self.running.lock().unwrap();
-            assert!(!*running, "run_stream called while a previous run is still active");
+            assert!(
+                !*running,
+                "run_stream called while a previous run is still active"
+            );
             *running = true;
         }
 
@@ -120,7 +124,7 @@ impl Agent {
             if let Err(panic_info) = result {
                 // Background task panicked — restore the original history
                 // to prevent data loss.
-                logger::error!("Agent background task panicked: {:?}", panic_info);
+                error!("Agent background task panicked: {:?}", panic_info);
                 *history_slot.lock().unwrap() = original_history;
             }
 

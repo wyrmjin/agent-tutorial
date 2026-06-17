@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use agent::{Agent, AgentConfig};
-use futures::StreamExt;
-use logger::{Logger, debug, error, info};
 use ai::{
     AuthStyle, Capabilities, GenericProvider, LanguageModel, Model, ModelRegistry,
     OpenAiCompletionsProtocol, ProtocolKind, SamplingParams, Transport,
 };
+use futures::StreamExt;
+use logger::Logger;
 use tool::{BashTool, ReadFileTool, ToolRegistry, WriteFileTool};
+use tracing::{debug, error, info};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -38,9 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let mut model_registry = ModelRegistry::new();
     model_registry.register("deepseek-v4-flash", model);
 
-    let model = model_registry
-        .default_model()
-        .expect("no model registered");
+    let model = model_registry.default_model().expect("no model registered");
 
     // 注册工具
     let mut tools = ToolRegistry::new();

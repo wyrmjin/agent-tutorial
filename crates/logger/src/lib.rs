@@ -4,8 +4,6 @@ use std::io;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
-pub use tracing::{debug, error, info, trace, warn};
-
 /// 日志配置结构体，通过 Builder 模式构建。
 #[derive(Debug)]
 pub struct Logger {

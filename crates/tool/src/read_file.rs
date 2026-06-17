@@ -3,13 +3,12 @@
 //! 路径限制：默认只允许读取当前工作目录内的文件。
 //! 读取外部文件需要用户审批，审批通过后该路径会被加入白名单。
 
+use crate::{Tool, ToolOutput, is_within_cwd};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-use crate::{Tool, ToolOutput, is_within_cwd};
-use logger::{debug, error, warn};
+use tracing::{debug, error, warn};
 
 pub struct ReadFileTool {
     timeout: Duration,
