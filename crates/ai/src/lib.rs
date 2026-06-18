@@ -12,6 +12,7 @@ pub mod provider;
 pub mod registry;
 pub mod stream;
 pub mod transport;
+pub mod usage;
 
 pub use error::AiError;
 pub use message::{Message, Role, ToolCallRequest, ToolSpec};
