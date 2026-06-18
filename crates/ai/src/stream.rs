@@ -1,6 +1,6 @@
 //! Streaming response model and the chunk iterator the agent consumes.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 
 use bytes::Bytes;
@@ -28,7 +28,34 @@ pub enum StreamChunk {
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub extra: std::collections::HashMap<String, serde_json::Value>,
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl Usage {
+    /// 返回 `(prompt_cache_hit_tokens, prompt_cache_miss_tokens)`。
+    ///
+    /// 仅当供应商(如 DeepSeek)同时提供了这两个字段且均为非负整数时返回 `Some`。
+    /// 任一字段缺失或类型不符则返回 `None`(视作该请求无缓存统计)。
+    pub fn cache_tokens(&self) -> Option<(u64, u64)> {
+        let hit = self.extra.get("prompt_cache_hit_tokens")?.as_u64()?;
+        let miss = self.extra.get("prompt_cache_miss_tokens")?.as_u64()?;
+        Some((hit, miss))
+    }
+
+    /// 返回缓存命中率(百分比, 0.0~100.0)。
+    ///
+    /// 基于 [`Self::cache_tokens`] 计算 `hit / (hit + miss) * 100`。
+    /// 当两个字段都为 0(供应商提供了统计但本轮无命中)时返回 `Some(0.0)`,
+    /// 避免除零; 当无缓存统计时返回 `None`。
+    pub fn cache_hit_percent(&self) -> Option<f64> {
+        let (hit, miss) = self.cache_tokens()?;
+        let total = hit + miss;
+        Some(if total == 0 {
+            0.0
+        } else {
+            hit as f64 / total as f64 * 100.0
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,5 +259,82 @@ mod decoding_stream_tests {
             assert_eq!(texts, vec!["foo".to_string(), "bar".to_string()]);
             assert!(finished);
         });
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::Usage;
+
+    fn usage_with_cache(hit: u64, miss: u64) -> Usage {
+        let mut u = Usage::default();
+        u.extra.insert(
+            "prompt_cache_hit_tokens".to_string(),
+            serde_json::json!(hit),
+        );
+        u.extra.insert(
+            "prompt_cache_miss_tokens".to_string(),
+            serde_json::json!(miss),
+        );
+        u
+    }
+
+    #[test]
+    fn cache_tokens_returns_hit_and_miss_when_present() {
+        let u = usage_with_cache(80, 20);
+        assert_eq!(u.cache_tokens(), Some((80, 20)));
+    }
+
+    #[test]
+    fn cache_tokens_none_when_fields_absent() {
+        assert_eq!(Usage::default().cache_tokens(), None);
+    }
+
+    #[test]
+    fn cache_tokens_none_when_miss_field_absent() {
+        let mut u = Usage::default();
+        u.extra.insert(
+            "prompt_cache_hit_tokens".to_string(),
+            serde_json::json!(80),
+        );
+        assert_eq!(u.cache_tokens(), None);
+    }
+
+    #[test]
+    fn cache_tokens_none_when_value_not_u64() {
+        let mut u = Usage::default();
+        u.extra.insert(
+            "prompt_cache_hit_tokens".to_string(),
+            serde_json::json!("eighty"),
+        );
+        u.extra.insert(
+            "prompt_cache_miss_tokens".to_string(),
+            serde_json::json!(20),
+        );
+        assert_eq!(u.cache_tokens(), None);
+    }
+
+    #[test]
+    fn cache_hit_percent_is_hit_over_total_times_100() {
+        let u = usage_with_cache(80, 20);
+        assert_eq!(u.cache_hit_percent(), Some(80.0));
+    }
+
+    #[test]
+    fn cache_hit_percent_zero_when_present_but_uncached() {
+        // 两个字段都在但都为 0: 供应商返回了统计, 只是本轮未命中。
+        let u = usage_with_cache(0, 0);
+        assert_eq!(u.cache_hit_percent(), Some(0.0));
+    }
+
+    #[test]
+    fn cache_hit_percent_full_when_all_cached() {
+        let u = usage_with_cache(100, 0);
+        assert_eq!(u.cache_hit_percent(), Some(100.0));
+    }
+
+    #[test]
+    fn cache_hit_percent_none_when_no_cache_data() {
+        assert_eq!(Usage::default().cache_hit_percent(), None);
     }
 }

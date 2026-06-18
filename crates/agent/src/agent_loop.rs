@@ -114,6 +114,18 @@ pub(crate) async fn run_loop_bg(
         let usage = outcome.usage();
         total_usage.input_tokens += usage.input_tokens;
         total_usage.output_tokens += usage.output_tokens;
+        // 单轮缓存命中率(DeepSeek prompt_cache_*), 用于诊断哪一轮 miss。
+        if let Some((hit, miss)) = usage.cache_tokens() {
+            // cache_tokens 为 Some 时 cache_hit_percent 必为 Some。
+            let pct = usage.cache_hit_percent().unwrap_or(0.0);
+            info!(
+                round = round + 1,
+                cache_hit_tokens = hit,
+                cache_miss_tokens = miss,
+                cache_hit_pct = %format_args!("{:.1}", pct),
+                "cache stats"
+            );
+        }
 
         // 6. Dispatch on outcome
         match outcome {
