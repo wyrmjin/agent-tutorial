@@ -369,7 +369,8 @@ impl OpenAiCompletionsDecoder {
                     .as_ref()
                     .map(|u| {
                         // 命中缓存的输入 token 数。DeepSeek 用 prompt_cache_hit_tokens;
-                        // OpenAI 用 prompt_tokens_details.cached_tokens。两者不会同时非零。
+                        // OpenAI 用 prompt_tokens_details.cached_tokens。两者通常不同时返回;
+                        // 取较大值——若某代理同时返回两者, 保留较大计数而非重复累加。
                         let cache_read = u.prompt_cache_hit_tokens.max(
                             u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens),
                         );
