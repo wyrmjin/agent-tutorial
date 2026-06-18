@@ -269,8 +269,6 @@ struct ApiUsage {
     // 以下为 DeepSeek 专有字段, 其它 OpenAI 兼容服务不会返回, 故 default=0。
     #[serde(default)]
     prompt_cache_hit_tokens: u64,
-    #[serde(default)]
-    prompt_cache_miss_tokens: u64,
 }
 
 // ── decoder ──────────────────────────────────────────────────────────────────
