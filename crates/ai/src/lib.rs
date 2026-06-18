@@ -23,6 +23,7 @@ pub use provider::{AuthStyle, Endpoint, GenericProvider, Provider};
 pub use registry::ModelRegistry;
 pub use stream::{
     ByteStream, DecodingStream, SseFrameReader, StopReason, StreamChunk, StreamChunkIterator,
-    StreamDecoder, Usage,
+    StreamDecoder,
 };
+pub use usage::Usage;
 pub use transport::Transport;

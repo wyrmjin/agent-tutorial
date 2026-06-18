@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use crate::error::AiError;
 use crate::message::{Message, ToolSpec};
 use crate::protocol::{Protocol, ProtocolKind, SamplingParams, ThinkingLevel};
-use crate::stream::{SseFrameReader, StopReason, StreamChunk, StreamDecoder, Usage};
+use crate::stream::{SseFrameReader, StopReason, StreamChunk, StreamDecoder};
+use crate::usage::Usage;
 use serde::{Deserialize, Serialize};
 use tracing::trace;
 
@@ -369,26 +370,18 @@ impl OpenAiCompletionsDecoder {
                     .usage
                     .as_ref()
                     .map(|u| {
-                        let mut extra = HashMap::new();
-                        extra.insert(
-                            "prompt_cache_hit_tokens".to_string(),
-                            serde_json::Value::Number(u.prompt_cache_hit_tokens.into()),
+                        // 命中缓存的输入 token 数。DeepSeek 用 prompt_cache_hit_tokens;
+                        // OpenAI 用 prompt_tokens_details.cached_tokens。两者不会同时非零。
+                        let cache_read = u.prompt_cache_hit_tokens.max(
+                            u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens),
                         );
-                        extra.insert(
-                            "prompt_cache_miss_tokens".to_string(),
-                            serde_json::Value::Number(u.prompt_cache_miss_tokens.into()),
-                        );
-                        if let Some(details) = &u.prompt_tokens_details {
-                            extra.insert(
-                                "cached_tokens".to_string(),
-                                serde_json::Value::Number(details.cached_tokens.into()),
-                            );
-                        }
-                        Usage {
-                            input_tokens: u.prompt_tokens,
-                            output_tokens: u.completion_tokens,
-                            extra,
-                        }
+                        // 互斥归一化: prompt_tokens 已含命中部分, 扣除后 input 为未命中/常规输入。
+                        Usage::from_components(
+                            u.prompt_tokens.saturating_sub(cache_read),
+                            u.completion_tokens,
+                            cache_read,
+                            0,
+                        )
                     })
                     .unwrap_or_default();
 
@@ -548,8 +541,9 @@ mod decoder_tests {
         match chunks.last().unwrap() {
             StreamChunk::Finished { stop_reason, usage } => {
                 assert_eq!(*stop_reason, StopReason::EndTurn);
-                assert_eq!(usage.input_tokens, 10);
-                assert_eq!(usage.output_tokens, 5);
+                assert_eq!(usage.input, 10);
+                assert_eq!(usage.output, 5);
+                assert_eq!(usage.cache_read, 0);
             }
             other => panic!("expected Finished, got {other:?}"),
         }
@@ -596,11 +590,31 @@ mod decoder_tests {
         match chunks.last().unwrap() {
             StreamChunk::Finished { stop_reason, usage } => {
                 assert_eq!(*stop_reason, StopReason::EndTurn);
-                assert_eq!(usage.input_tokens, 10);
-                assert_eq!(usage.output_tokens, 5);
-                // DeepSeek 专有字段缺失时按 0 记入 extra(关键是不能 Parse 失败中断流)。
-                assert_eq!(usage.extra["prompt_cache_hit_tokens"], 0);
-                assert_eq!(usage.extra["prompt_cache_miss_tokens"], 0);
+                assert_eq!(usage.input, 10);
+                assert_eq!(usage.output, 5);
+                assert_eq!(usage.cache_read, 0);
+                assert_eq!(usage.total_tokens, 15);
+            }
+            other => panic!("expected Finished, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decodes_deepseek_usage_normalized_to_mutually_exclusive() {
+        // DeepSeek: prompt_tokens=100 已含 30 命中(hit=30, miss=70)。
+        // 归一化后: input = 100 - 30 = 70(未命中), cache_read = 30, 两者互斥。
+        // total_tokens = 70(input) + 5(output) + 30(cache_read) + 0 = 105 == 原 prompt+completion。
+        let chunks = decode_all(&[b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":5,\"prompt_cache_hit_tokens\":30,\"prompt_cache_miss_tokens\":70}}\n"]);
+
+        match chunks.last().unwrap() {
+            StreamChunk::Finished { usage, .. } => {
+                assert_eq!(usage.input, 70);
+                assert_eq!(usage.output, 5);
+                assert_eq!(usage.cache_read, 30);
+                assert_eq!(usage.cache_write, 0);
+                assert_eq!(usage.total_tokens, 105);
+                // 互斥不变量: input + cache_read == 原 prompt_tokens(100)。
+                assert_eq!(usage.input + usage.cache_read, 100);
             }
             other => panic!("expected Finished, got {other:?}"),
         }

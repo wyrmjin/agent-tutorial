@@ -205,7 +205,7 @@ fn display_event(event: agent::AgentEvent) {
             println!("\n\n--- 回合结束 ---");
             println!(
                 "输入 tokens: {}, 输出 tokens: {}",
-                usage.input_tokens, usage.output_tokens
+                usage.input, usage.output
             );
         }
         agent::AgentEvent::ApprovalRequired { .. } => {
