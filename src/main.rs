@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use agent::{Agent, AgentConfig};
 use ai::{
-    AuthStyle, Capabilities, GenericProvider, LanguageModel, Model, ModelRegistry,
-    OpenAiCompletionsProtocol, ProtocolKind, SamplingParams, Transport,
+    AuthStyle, Capabilities, DeepSeekUsageNormalizer, GenericProvider, LanguageModel, Model,
+    ModelRegistry, OpenAiCompletionsProtocol, ProtocolKind, SamplingParams, Transport,
 };
 use futures::StreamExt;
 use logger::Logger;
@@ -20,13 +20,16 @@ async fn main() -> anyhow::Result<()> {
 
     // 组装:Provider(谁) + Protocol(怎么) + Transport(传输) → Model → ModelRegistry
     let transport = Arc::new(Transport::new());
-    let provider = Arc::new(GenericProvider::new(
-        "deepseek",
-        "https://api.deepseek.com",
-        api_key,
-        AuthStyle::Bearer,
-        vec![ProtocolKind::OpenAiCompletions],
-    ));
+    let provider = Arc::new(
+        GenericProvider::new(
+            "deepseek",
+            "https://api.deepseek.com",
+            api_key,
+            AuthStyle::Bearer,
+            vec![ProtocolKind::OpenAiCompletions],
+        )
+        .with_usage_normalizer(Arc::new(DeepSeekUsageNormalizer)),
+    );
     let model: Arc<dyn LanguageModel> = Arc::new(Model::new(
         "deepseek-v4-flash",
         provider,

@@ -2,9 +2,12 @@
 
 pub mod openai_completions;
 
+use std::sync::Arc;
+
 use crate::error::AiError;
 use crate::message::{Message, ToolSpec};
 use crate::stream::StreamDecoder;
+use crate::usage::UsageNormalizer;
 
 /// Which wire protocol a model speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,5 +59,8 @@ pub trait Protocol: Send + Sync {
     ) -> Result<serde_json::Value, AiError>;
 
     /// New decoder holding this response's streaming accumulation state.
-    fn new_decoder(&self) -> Box<dyn StreamDecoder>;
+    ///
+    /// `normalizer` 由调用方(Transport, 来自 Provider)注入, decoder 把原始
+    /// usage 字段交给它归一化——协议因此不感知具体供应商。
+    fn new_decoder(&self, normalizer: Arc<dyn UsageNormalizer>) -> Box<dyn StreamDecoder>;
 }

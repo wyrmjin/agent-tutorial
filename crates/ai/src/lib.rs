@@ -25,5 +25,5 @@ pub use stream::{
     ByteStream, DecodingStream, SseFrameReader, StopReason, StreamChunk, StreamChunkIterator,
     StreamDecoder,
 };
-pub use usage::Usage;
 pub use transport::Transport;
+pub use usage::{DeepSeekUsageNormalizer, OpenAiUsageNormalizer, Usage, UsageNormalizer};

@@ -1,6 +1,9 @@
 //! Provider abstraction: who we talk to (endpoint + auth + supported protocols).
 
+use std::sync::Arc;
+
 use crate::protocol::ProtocolKind;
+use crate::usage::{OpenAiUsageNormalizer, UsageNormalizer};
 
 /// Endpoint with auth already baked into headers; transport uses it directly.
 #[derive(Debug, Clone)]
@@ -23,6 +26,9 @@ pub trait Provider: Send + Sync {
     fn name(&self) -> &str;
     fn endpoint(&self) -> Endpoint;
     fn supported_protocols(&self) -> &[ProtocolKind];
+
+    /// 该供应商的 usage 归一化策略, decoder 用它把原始响应转成互斥 [`Usage`]。
+    fn usage_normalizer(&self) -> Arc<dyn UsageNormalizer>;
 }
 
 /// Generic config-driven provider; covers DeepSeek / OpenAI / Anthropic etc.
@@ -33,6 +39,7 @@ pub struct GenericProvider {
     auth: AuthStyle,
     protocols: Vec<ProtocolKind>,
     extra_headers: Vec<(String, String)>,
+    usage_normalizer: Arc<dyn UsageNormalizer>,
 }
 
 impl GenericProvider {
@@ -50,12 +57,20 @@ impl GenericProvider {
             auth,
             protocols,
             extra_headers: Vec::new(),
+            usage_normalizer: Arc::new(OpenAiUsageNormalizer),
         }
     }
 
     /// Add a provider-specific header (e.g. OpenRouter's referer).
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.extra_headers.push((key.into(), value.into()));
+        self
+    }
+
+    /// 覆盖默认的 usage 归一化策略(默认为 OpenAI 口径)。
+    /// DeepSeek 等用专有缓存字段的服务需配置对应的 normalizer。
+    pub fn with_usage_normalizer(mut self, normalizer: Arc<dyn UsageNormalizer>) -> Self {
+        self.usage_normalizer = normalizer;
         self
     }
 }
@@ -69,17 +84,27 @@ impl Provider for GenericProvider {
         let mut headers = self.extra_headers.clone();
         match &self.auth {
             AuthStyle::Bearer => {
-                headers.push(("Authorization".to_string(), format!("Bearer {}", self.api_key)));
+                headers.push((
+                    "Authorization".to_string(),
+                    format!("Bearer {}", self.api_key),
+                ));
             }
             AuthStyle::ApiKeyHeader(name) => {
                 headers.push((name.clone(), self.api_key.clone()));
             }
         }
-        Endpoint { base_url: self.base_url.clone(), headers }
+        Endpoint {
+            base_url: self.base_url.clone(),
+            headers,
+        }
     }
 
     fn supported_protocols(&self) -> &[ProtocolKind] {
         &self.protocols
+    }
+
+    fn usage_normalizer(&self) -> Arc<dyn UsageNormalizer> {
+        self.usage_normalizer.clone()
     }
 }
 
@@ -98,10 +123,11 @@ mod tests {
         );
         let ep = p.endpoint();
         assert_eq!(ep.base_url, "https://api.deepseek.com");
-        assert!(ep
-            .headers
-            .iter()
-            .any(|(k, v)| k == "Authorization" && v == "Bearer sk-123"));
+        assert!(
+            ep.headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer sk-123")
+        );
         assert_eq!(p.supported_protocols(), &[ProtocolKind::OpenAiCompletions]);
     }
 
@@ -115,6 +141,10 @@ mod tests {
             vec![ProtocolKind::AnthropicMessages],
         );
         let ep = p.endpoint();
-        assert!(ep.headers.iter().any(|(k, v)| k == "x-api-key" && v == "sk-ant"));
+        assert!(
+            ep.headers
+                .iter()
+                .any(|(k, v)| k == "x-api-key" && v == "sk-ant")
+        );
     }
 }

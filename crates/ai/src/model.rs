@@ -74,10 +74,12 @@ impl LanguageModel for Model {
         tools: &[ToolSpec],
     ) -> Result<Box<dyn StreamChunkIterator>, AiError> {
         let endpoint = self.provider.endpoint();
+        let normalizer = self.provider.usage_normalizer();
         self.transport
             .stream(
                 &endpoint,
                 self.protocol.as_ref(),
+                normalizer,
                 &self.id,
                 &self.params,
                 messages,
@@ -94,8 +96,8 @@ impl LanguageModel for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::openai_completions::OpenAiCompletionsProtocol;
     use crate::protocol::ProtocolKind;
+    use crate::protocol::openai_completions::OpenAiCompletionsProtocol;
     use crate::provider::{AuthStyle, GenericProvider};
 
     #[test]

@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 
 use bytes::Bytes;
-use futures::stream::Stream;
 use futures::StreamExt;
+use futures::stream::Stream;
 
 use crate::error::AiError;
 use crate::usage::Usage;
@@ -194,7 +194,9 @@ mod decoding_stream_tests {
     struct EchoDecoder;
     impl StreamDecoder for EchoDecoder {
         fn feed(&mut self, bytes: &[u8]) -> Result<Vec<StreamChunk>, AiError> {
-            Ok(vec![StreamChunk::Text(String::from_utf8_lossy(bytes).into_owned())])
+            Ok(vec![StreamChunk::Text(
+                String::from_utf8_lossy(bytes).into_owned(),
+            )])
         }
         fn finish(&mut self) -> Result<Vec<StreamChunk>, AiError> {
             Ok(vec![StreamChunk::Finished {
