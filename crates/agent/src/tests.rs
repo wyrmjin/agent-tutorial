@@ -109,18 +109,13 @@ impl ai::LanguageModel for MultiRoundMockModel {
             *count += 1;
             i
         };
-        let chunks = self
-            .responses
-            .get(idx)
-            .cloned()
-            .unwrap_or_else(|| vec![ai::StreamChunk::Finished {
+        let chunks = self.responses.get(idx).cloned().unwrap_or_else(|| {
+            vec![ai::StreamChunk::Finished {
                 stop_reason: ai::StopReason::EndTurn,
                 usage: ai::Usage::default(),
-            }]);
-        Ok(Box::new(MockStream {
-            chunks,
-            index: 0,
-        }))
+            }]
+        });
+        Ok(Box::new(MockStream { chunks, index: 0 }))
     }
 
     fn model_id(&self) -> &str {
@@ -592,10 +587,11 @@ async fn test_stream_error_reports_error_event() {
     struct ErrorStream;
     #[async_trait::async_trait]
     impl ai::StreamChunkIterator for ErrorStream {
-        async fn next(
-            &mut self,
-        ) -> Result<Option<ai::StreamChunk>, ai::AiError> {
-            Err(ai::AiError::Api { status: 500, message: "connection lost".to_string() })
+        async fn next(&mut self) -> Result<Option<ai::StreamChunk>, ai::AiError> {
+            Err(ai::AiError::Api {
+                status: 500,
+                message: "connection lost".to_string(),
+            })
         }
     }
     struct ErrorModel;
@@ -628,7 +624,9 @@ async fn test_stream_error_reports_error_event() {
         })
         .collect();
     assert!(
-        error_events.iter().any(|m| m.contains("Provider stream error")),
+        error_events
+            .iter()
+            .any(|m| m.contains("Provider stream error")),
         "expected a stream error event, got errors: {:?}",
         error_events
     );

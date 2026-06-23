@@ -112,8 +112,29 @@ pub(crate) async fn run_loop_bg(
 
         // 5. Accumulate usage (every variant carries it)
         let usage = outcome.usage();
-        total_usage.input_tokens += usage.input_tokens;
-        total_usage.output_tokens += usage.output_tokens;
+        total_usage.input += usage.input;
+        total_usage.output += usage.output;
+        total_usage.cache_read += usage.cache_read;
+        total_usage.cache_write += usage.cache_write;
+        total_usage.total_tokens += usage.total_tokens;
+
+        // 单轮缓存命中率, 用于诊断哪一轮 miss。
+        // input 已归一化为未命中部分, 故命中率 = cache_read / (cache_read + input)。
+        let cache_total = usage.cache_read + usage.input;
+        let cache_hit_pct = if cache_total == 0 {
+            0.0
+        } else {
+            usage.cache_read as f64 / cache_total as f64 * 100.0
+        };
+        info!(
+            round = round + 1,
+            input = usage.input,
+            output = usage.output,
+            cache_read = usage.cache_read,
+            cache_write = usage.cache_write,
+            cache_hit_pct = %format_args!("{:.1}", cache_hit_pct),
+            "usage"
+        );
 
         // 6. Dispatch on outcome
         match outcome {
@@ -449,8 +470,10 @@ fn emit_turn_end(
 ) {
     info!(
         round = round + 1,
-        input_tokens = usage.input_tokens,
-        output_tokens = usage.output_tokens,
+        input = usage.input,
+        output = usage.output,
+        cache_read = usage.cache_read,
+        total = usage.total_tokens,
         "turn complete"
     );
     sender.push(AgentEvent::TurnEnd {

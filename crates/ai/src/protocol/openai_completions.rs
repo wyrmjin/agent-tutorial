@@ -3,11 +3,13 @@
 //! Migrated from the former `deepseek.rs`.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::AiError;
 use crate::message::{Message, ToolSpec};
 use crate::protocol::{Protocol, ProtocolKind, SamplingParams, ThinkingLevel};
-use crate::stream::{SseFrameReader, StopReason, StreamChunk, StreamDecoder, Usage};
+use crate::stream::{SseFrameReader, StopReason, StreamChunk, StreamDecoder};
+use crate::usage::UsageNormalizer;
 use serde::{Deserialize, Serialize};
 use tracing::trace;
 
@@ -216,8 +218,8 @@ impl Protocol for OpenAiCompletionsProtocol {
         serde_json::to_value(&request).map_err(|e| AiError::Encode(e.to_string()))
     }
 
-    fn new_decoder(&self) -> Box<dyn StreamDecoder> {
-        Box::new(OpenAiCompletionsDecoder::new())
+    fn new_decoder(&self, normalizer: Arc<dyn UsageNormalizer>) -> Box<dyn StreamDecoder> {
+        Box::new(OpenAiCompletionsDecoder::new(normalizer))
     }
 }
 
@@ -255,21 +257,13 @@ struct FunctionChunk {
 }
 
 #[derive(Deserialize, Debug)]
-struct PromptTokensDetails {
-    cached_tokens: u64,
-}
-
-#[derive(Deserialize, Debug)]
 struct ApiUsage {
     prompt_tokens: u64,
     completion_tokens: u64,
-    #[serde(default)]
-    prompt_tokens_details: Option<PromptTokensDetails>,
-    // 以下为 DeepSeek 专有字段, 其它 OpenAI 兼容服务不会返回, 故 default=0。
-    #[serde(default)]
-    prompt_cache_hit_tokens: u64,
-    #[serde(default)]
-    prompt_cache_miss_tokens: u64,
+    /// 非公共字段(DeepSeek 的 prompt_cache_hit_tokens、OpenAI 的
+    /// prompt_tokens_details 等)全部落入此处, 由 provider 注入的 normalizer 提取。
+    #[serde(flatten)]
+    extra: serde_json::Value,
 }
 
 // ── decoder ──────────────────────────────────────────────────────────────────
@@ -281,14 +275,16 @@ pub struct OpenAiCompletionsDecoder {
     frames: SseFrameReader,
     pending_tool_calls: HashMap<u32, PendingToolCall>,
     done: bool,
+    normalizer: Arc<dyn UsageNormalizer>,
 }
 
 impl OpenAiCompletionsDecoder {
-    fn new() -> Self {
+    fn new(normalizer: Arc<dyn UsageNormalizer>) -> Self {
         Self {
             frames: SseFrameReader::new(),
             pending_tool_calls: HashMap::new(),
             done: false,
+            normalizer,
         }
     }
 
@@ -369,26 +365,10 @@ impl OpenAiCompletionsDecoder {
                     .usage
                     .as_ref()
                     .map(|u| {
-                        let mut extra = HashMap::new();
-                        extra.insert(
-                            "prompt_cache_hit_tokens".to_string(),
-                            serde_json::Value::Number(u.prompt_cache_hit_tokens.into()),
-                        );
-                        extra.insert(
-                            "prompt_cache_miss_tokens".to_string(),
-                            serde_json::Value::Number(u.prompt_cache_miss_tokens.into()),
-                        );
-                        if let Some(details) = &u.prompt_tokens_details {
-                            extra.insert(
-                                "cached_tokens".to_string(),
-                                serde_json::Value::Number(details.cached_tokens.into()),
-                            );
-                        }
-                        Usage {
-                            input_tokens: u.prompt_tokens,
-                            output_tokens: u.completion_tokens,
-                            extra,
-                        }
+                        // 互斥归一化交给 provider 注入的 normalizer:
+                        // 它从 extra 中按各自口径提取 cache_read, 并扣除出 input。
+                        self.normalizer
+                            .normalize(u.prompt_tokens, u.completion_tokens, &u.extra)
                     })
                     .unwrap_or_default();
 
@@ -512,13 +492,23 @@ mod build_body_tests {
 
 #[cfg(test)]
 mod decoder_tests {
+    use std::sync::Arc;
+
     use super::OpenAiCompletionsProtocol;
     use crate::protocol::Protocol;
     use crate::stream::{StopReason, StreamChunk};
+    use crate::usage::{OpenAiUsageNormalizer, UsageNormalizer};
 
     fn decode_all(bytes_chunks: &[&[u8]]) -> Vec<StreamChunk> {
+        decode_all_with_normalizer(bytes_chunks, Arc::new(OpenAiUsageNormalizer))
+    }
+
+    fn decode_all_with_normalizer(
+        bytes_chunks: &[&[u8]],
+        normalizer: Arc<dyn UsageNormalizer>,
+    ) -> Vec<StreamChunk> {
         let p = OpenAiCompletionsProtocol::new();
-        let mut d = p.new_decoder();
+        let mut d = p.new_decoder(normalizer);
         let mut out = Vec::new();
         for b in bytes_chunks {
             out.extend(d.feed(b).unwrap());
@@ -548,8 +538,9 @@ mod decoder_tests {
         match chunks.last().unwrap() {
             StreamChunk::Finished { stop_reason, usage } => {
                 assert_eq!(*stop_reason, StopReason::EndTurn);
-                assert_eq!(usage.input_tokens, 10);
-                assert_eq!(usage.output_tokens, 5);
+                assert_eq!(usage.input, 10);
+                assert_eq!(usage.output, 5);
+                assert_eq!(usage.cache_read, 0);
             }
             other => panic!("expected Finished, got {other:?}"),
         }
@@ -596,11 +587,35 @@ mod decoder_tests {
         match chunks.last().unwrap() {
             StreamChunk::Finished { stop_reason, usage } => {
                 assert_eq!(*stop_reason, StopReason::EndTurn);
-                assert_eq!(usage.input_tokens, 10);
-                assert_eq!(usage.output_tokens, 5);
-                // DeepSeek 专有字段缺失时按 0 记入 extra(关键是不能 Parse 失败中断流)。
-                assert_eq!(usage.extra["prompt_cache_hit_tokens"], 0);
-                assert_eq!(usage.extra["prompt_cache_miss_tokens"], 0);
+                assert_eq!(usage.input, 10);
+                assert_eq!(usage.output, 5);
+                assert_eq!(usage.cache_read, 0);
+                assert_eq!(usage.total_tokens, 15);
+            }
+            other => panic!("expected Finished, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decodes_deepseek_usage_normalized_to_mutually_exclusive() {
+        // DeepSeek: prompt_tokens=100 已含 30 命中(hit=30, miss=70)。
+        // 注入 DeepSeekUsageNormalizer 后:
+        //   input = 100 - 30 = 70(未命中), cache_read = 30, 两者互斥。
+        //   total_tokens = 70(input) + 5(output) + 30(cache_read) + 0 = 105 == 原 prompt+completion。
+        let chunks = decode_all_with_normalizer(
+            &[b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":5,\"prompt_cache_hit_tokens\":30,\"prompt_cache_miss_tokens\":70}}\n"],
+            Arc::new(crate::usage::DeepSeekUsageNormalizer),
+        );
+
+        match chunks.last().unwrap() {
+            StreamChunk::Finished { usage, .. } => {
+                assert_eq!(usage.input, 70);
+                assert_eq!(usage.output, 5);
+                assert_eq!(usage.cache_read, 30);
+                assert_eq!(usage.cache_write, 0);
+                assert_eq!(usage.total_tokens, 105);
+                // 互斥不变量: input + cache_read == 原 prompt_tokens(100)。
+                assert_eq!(usage.input + usage.cache_read, 100);
             }
             other => panic!("expected Finished, got {other:?}"),
         }
@@ -647,7 +662,7 @@ mod decoder_tests {
     fn malformed_tool_arguments_surface_parse_error() {
         // arguments 非空但畸形(如被 max_tokens 截断)→ 不应静默吞成 Null, 应返回 Parse 错误。
         let p = OpenAiCompletionsProtocol::new();
-        let mut d = p.new_decoder();
+        let mut d = p.new_decoder(Arc::new(OpenAiUsageNormalizer));
         let res = d.feed(b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"echo\",\"arguments\":\"{not json\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":null}\n");
         assert!(
             matches!(res, Err(crate::error::AiError::Parse(_))),

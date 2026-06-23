@@ -12,6 +12,7 @@ pub mod provider;
 pub mod registry;
 pub mod stream;
 pub mod transport;
+pub mod usage;
 
 pub use error::AiError;
 pub use message::{Message, Role, ToolCallRequest, ToolSpec};
@@ -22,6 +23,7 @@ pub use provider::{AuthStyle, Endpoint, GenericProvider, Provider};
 pub use registry::ModelRegistry;
 pub use stream::{
     ByteStream, DecodingStream, SseFrameReader, StopReason, StreamChunk, StreamChunkIterator,
-    StreamDecoder, Usage,
+    StreamDecoder,
 };
 pub use transport::Transport;
+pub use usage::{DeepSeekUsageNormalizer, OpenAiUsageNormalizer, Usage, UsageNormalizer};

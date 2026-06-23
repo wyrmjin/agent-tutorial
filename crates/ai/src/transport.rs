@@ -1,10 +1,13 @@
 //! Generic HTTP transport. Knows nothing about specific protocols or providers.
 
+use std::sync::Arc;
+
 use crate::error::AiError;
 use crate::message::{Message, ToolSpec};
 use crate::protocol::{Protocol, SamplingParams};
 use crate::provider::Endpoint;
 use crate::stream::{DecodingStream, StreamChunkIterator};
+use crate::usage::UsageNormalizer;
 use tracing::{debug, error};
 
 pub struct Transport {
@@ -20,10 +23,14 @@ impl Transport {
 
     /// Encode via `protocol`, POST to the provider `endpoint`, and return a
     /// decoding stream of `StreamChunk`s.
+    ///
+    /// `normalizer` 来自调用方的 provider, 透传给 decoder 用于 usage 归一化。
+    #[allow(clippy::too_many_arguments)] // 正交三层的接线 + 请求载荷, 难以进一步收敛。
     pub async fn stream(
         &self,
         endpoint: &Endpoint,
         protocol: &dyn Protocol,
+        normalizer: Arc<dyn UsageNormalizer>,
         model_id: &str,
         params: &SamplingParams,
         messages: &[Message],
@@ -53,7 +60,7 @@ impl Transport {
 
         Ok(Box::new(DecodingStream::new(
             Box::pin(response.bytes_stream()),
-            protocol.new_decoder(),
+            protocol.new_decoder(normalizer),
         )))
     }
 }

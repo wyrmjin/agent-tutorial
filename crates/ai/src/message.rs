@@ -43,19 +43,29 @@ impl Message {
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        Message::User { content: content.into() }
+        Message::User {
+            content: content.into(),
+        }
     }
 
     pub fn system(content: impl Into<String>) -> Self {
-        Message::System { content: content.into() }
+        Message::System {
+            content: content.into(),
+        }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
-        Message::Assistant { content: content.into(), tool_calls: None }
+        Message::Assistant {
+            content: content.into(),
+            tool_calls: None,
+        }
     }
 
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Message::Tool { content: content.into(), tool_call_id: tool_call_id.into() }
+        Message::Tool {
+            content: content.into(),
+            tool_call_id: tool_call_id.into(),
+        }
     }
 }
 

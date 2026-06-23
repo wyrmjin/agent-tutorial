@@ -4,10 +4,11 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 
 use bytes::Bytes;
-use futures::stream::Stream;
 use futures::StreamExt;
+use futures::stream::Stream;
 
 use crate::error::AiError;
+use crate::usage::Usage;
 
 /// A streaming chunk from the LLM.
 #[derive(Debug, Clone)]
@@ -22,13 +23,6 @@ pub enum StreamChunk {
         stop_reason: StopReason,
         usage: Usage,
     },
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Usage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,7 +194,9 @@ mod decoding_stream_tests {
     struct EchoDecoder;
     impl StreamDecoder for EchoDecoder {
         fn feed(&mut self, bytes: &[u8]) -> Result<Vec<StreamChunk>, AiError> {
-            Ok(vec![StreamChunk::Text(String::from_utf8_lossy(bytes).into_owned())])
+            Ok(vec![StreamChunk::Text(
+                String::from_utf8_lossy(bytes).into_owned(),
+            )])
         }
         fn finish(&mut self) -> Result<Vec<StreamChunk>, AiError> {
             Ok(vec![StreamChunk::Finished {
